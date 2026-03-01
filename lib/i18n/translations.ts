@@ -121,6 +121,16 @@ const en: Record<string, string> = {
   "landing.getStarted": "Get Started",
   "landing.viewGithub": "View on GitHub",
   "landing.techStack": "Built with",
+  // theme
+  "theme.light": "Light mode",
+  "theme.dark": "Dark mode",
+  // detail extra
+  "detail.current": "Current",
+  "detail.errorPrefix": "Error",
+  "detail.orgLabel": "Org",
+  // accounts extra
+  "accounts.confirmDelete": "Are you sure you want to delete this account?",
+  "accounts.cancel": "Cancel",
 };
 
 const ko: Record<string, string> = {
@@ -225,6 +235,13 @@ const ko: Record<string, string> = {
   "landing.getStarted": "시작하기",
   "landing.viewGithub": "GitHub에서 보기",
   "landing.techStack": "기술 스택",
+  "theme.light": "라이트 모드",
+  "theme.dark": "다크 모드",
+  "detail.current": "현재",
+  "detail.errorPrefix": "오류",
+  "detail.orgLabel": "Org",
+  "accounts.confirmDelete": "이 계정을 삭제하시겠습니까?",
+  "accounts.cancel": "취소",
 };
 
 const ja: Record<string, string> = {
@@ -329,6 +346,13 @@ const ja: Record<string, string> = {
   "landing.getStarted": "始める",
   "landing.viewGithub": "GitHubで見る",
   "landing.techStack": "技術スタック",
+  "theme.light": "ライトモード",
+  "theme.dark": "ダークモード",
+  "detail.current": "現在",
+  "detail.errorPrefix": "エラー",
+  "detail.orgLabel": "Org",
+  "accounts.confirmDelete": "このアカウントを削除しますか？",
+  "accounts.cancel": "キャンセル",
 };
 
 const zh: Record<string, string> = {
@@ -433,6 +457,13 @@ const zh: Record<string, string> = {
   "landing.getStarted": "开始使用",
   "landing.viewGithub": "在GitHub查看",
   "landing.techStack": "技术栈",
+  "theme.light": "浅色模式",
+  "theme.dark": "深色模式",
+  "detail.current": "当前",
+  "detail.errorPrefix": "错误",
+  "detail.orgLabel": "组织",
+  "accounts.confirmDelete": "确定要删除此账户吗？",
+  "accounts.cancel": "取消",
 };
 
 const es: Record<string, string> = {
@@ -537,6 +568,13 @@ const es: Record<string, string> = {
   "landing.getStarted": "Comenzar",
   "landing.viewGithub": "Ver en GitHub",
   "landing.techStack": "Tecnologías",
+  "theme.light": "Modo claro",
+  "theme.dark": "Modo oscuro",
+  "detail.current": "Actual",
+  "detail.errorPrefix": "Error",
+  "detail.orgLabel": "Org",
+  "accounts.confirmDelete": "Seguro que desea eliminar esta cuenta?",
+  "accounts.cancel": "Cancelar",
 };
 
 const pt: Record<string, string> = {
@@ -641,6 +679,13 @@ const pt: Record<string, string> = {
   "landing.getStarted": "Começar",
   "landing.viewGithub": "Ver no GitHub",
   "landing.techStack": "Tecnologias",
+  "theme.light": "Modo claro",
+  "theme.dark": "Modo escuro",
+  "detail.current": "Atual",
+  "detail.errorPrefix": "Erro",
+  "detail.orgLabel": "Org",
+  "accounts.confirmDelete": "Tem certeza que deseja excluir esta conta?",
+  "accounts.cancel": "Cancelar",
 };
 
 export const translations: Record<Locale, Record<string, string>> = { en, ko, ja, zh, es, pt };

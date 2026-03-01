@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   if (!checkRateLimit(ip)) {
     return NextResponse.json(
-      { ok: false, error: "로그인 시도가 너무 많습니다. 1분 후 다시 시도하세요." },
+      { ok: false, error: "Too many login attempts. Please try again in 1 minute." },
       { status: 429, headers: { "Retry-After": "60" } },
     );
   }
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   const password = body.password || "";
 
   if (!isValidCredential(username, password)) {
-    return NextResponse.json({ ok: false, error: "아이디 또는 비밀번호가 올바르지 않습니다." }, { status: 401 });
+    return NextResponse.json({ ok: false, error: "Invalid username or password." }, { status: 401 });
   }
 
   const token = createSessionToken(username);

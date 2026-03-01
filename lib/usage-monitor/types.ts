@@ -11,7 +11,7 @@ export interface MonitorAccount {
   name: string;
   provider: ProviderType;
   enabled: boolean;
-  /** Claude: 브라우저 세션 쿠키 (key1=value1; key2=value2) */
+  /** Claude: browser session cookie (key1=value1; key2=value2) */
   sessionCookie?: string;
   /** OpenAI: Admin API Key */
   apiKey?: string;

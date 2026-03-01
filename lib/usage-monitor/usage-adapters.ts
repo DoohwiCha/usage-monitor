@@ -72,7 +72,7 @@ async function fetchJson(url: string, headers: HeadersInit): Promise<unknown> {
   if (!response.ok) {
     const body = await response.text();
     console.error(`[fetchJson] HTTP ${response.status} from ${url}:`, body.slice(0, 500));
-    throw new Error(`외부 API 요청 실패 (HTTP ${response.status})`);
+    throw new Error(`External API request failed (HTTP ${response.status})`);
   }
 
   return response.json();
@@ -152,7 +152,7 @@ async function fetchOpenAIUsage(account: MonitorAccount, range: ResolvedRange): 
   return sumReport(account, "ok", points);
 }
 
-// ─── OpenAI (oh-my-codex 메트릭 파일 읽기) ───────────────────────
+// ─── OpenAI (oh-my-codex metrics file read) ──────────────────────
 
 async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<AccountUsageReport> {
   const fs = await import("fs/promises");
@@ -184,7 +184,7 @@ async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<Account
       });
     }
 
-    // 로그인 시 저장된 구독 정보
+    // Subscription info saved during login
     let billing: ProviderUsageInfo["billing"] | undefined;
     if (account.subscriptionInfo?.plan) {
       billing = {
@@ -200,7 +200,7 @@ async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<Account
     }
     return report;
   } catch {
-    return emptyReport(account, "ok", "oh-my-codex 메트릭을 찾을 수 없습니다 (~/.omx/metrics.json)");
+    return emptyReport(account, "ok", "oh-my-codex metrics not found (~/.omx/metrics.json)");
   }
 }
 
@@ -218,11 +218,11 @@ function parseCookieString(cookieStr: string, domain = ".claude.ai"): Array<{ na
       const value = part.slice(eqIdx + 1).trim();
       if (!name) return null;
 
-      // __Host- 쿠키는 domain 없이, secure + path=/ 필수
+      // __Host- cookies require no domain, secure + path=/ mandatory
       if (name.startsWith("__Host-")) {
         return { name, value, domain: domain.replace(/^\./, ""), path: "/", secure: true };
       }
-      // __Secure- 쿠키는 secure 필수
+      // __Secure- cookies require secure flag
       if (name.startsWith("__Secure-")) {
         return { name, value, domain, path: "/", secure: true };
       }
@@ -235,14 +235,14 @@ function parseCookieString(cookieStr: string, domain = ".claude.ai"): Array<{ na
 async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange): Promise<AccountUsageReport> {
   const cookieStr = account.sessionCookie || "";
   if (!cookieStr) {
-    return emptyReport(account, "not_configured", "세션 쿠키가 비어 있습니다.");
+    return emptyReport(account, "not_configured", "Session cookie is empty.");
   }
 
   let playwright;
   try {
     playwright = await import("playwright");
   } catch {
-    return emptyReport(account, "error", "Playwright가 설치되지 않았습니다. `npx playwright install chromium`을 실행해 주세요.");
+    return emptyReport(account, "error", "Playwright is not installed. Run `npx playwright install chromium`.");
   }
 
   const browser = await playwright.chromium.launch({ headless: true });
@@ -253,25 +253,25 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
 
     const cookies = parseCookieString(cookieStr);
     if (cookies.length === 0) {
-      return emptyReport(account, "error", "쿠키를 파싱할 수 없습니다.");
+      return emptyReport(account, "error", "Failed to parse cookies.");
     }
     await context.addCookies(cookies);
 
     const page = await context.newPage();
 
-    // 최소한의 페이지 로드 (도메인 확립만 — 전체 렌더링 불필요)
+    // Minimal page load (domain establishment only — full rendering not needed)
     await page.goto("https://claude.ai/settings", {
       waitUntil: "domcontentloaded",
       timeout: 15_000,
     });
 
-    // 로그인 리다이렉트 확인
+    // Check for login redirect
     const currentUrl = page.url();
     if (currentUrl.includes("/login") || currentUrl.includes("/oauth") || currentUrl.includes("/sso")) {
-      return emptyReport(account, "error", "세션 쿠키가 만료되었습니다. 다시 로그인해 주세요.");
+      return emptyReport(account, "error", "Session cookie expired. Please login again.");
     }
 
-    // 브라우저 컨텍스트에서 API 병렬 호출 (Cloudflare 우회)
+    // Parallel API calls from browser context (Cloudflare bypass)
     const evalResult = await page.evaluate(async () => {
       try {
         const orgsRes = await fetch("/api/organizations");
@@ -281,7 +281,7 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
 
         const orgUuid = orgs[0].uuid;
 
-        // usage + billing 병렬 호출
+        // Parallel calls for usage + billing
         const [usageRes, billingRes] = await Promise.all([
           fetch(`/api/organizations/${orgUuid}/usage`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
           fetch(`/api/organizations/${orgUuid}/settings/billing`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
@@ -294,7 +294,7 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
     });
 
     if (!evalResult || "error" in evalResult) {
-      const errMsg = evalResult && "error" in evalResult ? String(evalResult.error) : "데이터 조회 실패";
+      const errMsg = evalResult && "error" in evalResult ? String(evalResult.error) : "Data fetch failed";
       return emptyReport(account, "error", errMsg);
     }
 
@@ -313,7 +313,7 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
     };
   } catch (error) {
     console.error("[fetchClaudeUsage] Error:", error);
-    return emptyReport(account, "error", "Claude 사용량 조회에 실패했습니다.");
+    return emptyReport(account, "error", "Failed to fetch Claude usage.");
   } finally {
     await browser.close().catch(() => {});
   }
@@ -343,12 +343,12 @@ function parseClaudeUsageInfo(dataList: unknown[]): ProviderUsageInfo {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const obj = raw as Record<string, unknown>;
 
-    // 사용량 utilization 데이터 (five_hour, seven_day 등)
+    // Usage utilization data (five_hour, seven_day, etc.)
     if ("five_hour" in obj || "seven_day" in obj) {
       for (const [key, label] of Object.entries(CLAUDE_WINDOW_LABELS)) {
         const win = obj[key] as ClaudeUtilizationRaw | null | undefined;
         if (win && typeof win === "object" && typeof win.utilization === "number") {
-          // 중복 방지
+          // Prevent duplicates
           if (!windows.some((w) => w.label === label)) {
             windows.push({
               label,
@@ -370,7 +370,7 @@ function parseClaudeUsageInfo(dataList: unknown[]): ProviderUsageInfo {
       }
     }
 
-    // 빌링 데이터
+    // Billing data
     if ("next_charge_date" in obj && "status" in obj && !billing) {
       billing = {
         status: String(obj.status || ""),
@@ -394,7 +394,7 @@ export async function testConnection(account: MonitorAccount): Promise<Connectio
   try {
     if (account.provider === "claude") {
       if (!account.sessionCookie) {
-        return { ok: false, message: "세션 쿠키가 입력되지 않았습니다." };
+        return { ok: false, message: "Session cookie is not set." };
       }
 
       const headers: Record<string, string> = {
@@ -410,29 +410,29 @@ export async function testConnection(account: MonitorAccount): Promise<Connectio
       const orgs = (Array.isArray(orgsRaw) ? orgsRaw : []) as Array<{ uuid: string; name?: string }>;
 
       if (orgs.length === 0) {
-        return { ok: false, message: "세션 쿠키가 유효하지 않습니다. 만료되었을 수 있습니다." };
+        return { ok: false, message: "Session cookie is invalid. It may have expired." };
       }
 
       const orgName = orgs[0].name || orgs[0].uuid;
-      return { ok: true, message: `연결 성공 — 조직: ${orgName}` };
+      return { ok: true, message: `Connected — Organization: ${orgName}` };
     }
 
     if (account.provider === "openai") {
       if (account.apiKey) {
         const headers = buildOpenAIHeaders(account);
         await fetchJson("https://api.openai.com/v1/organization/costs?start_time=0&end_time=1&bucket_width=1d", headers);
-        return { ok: true, message: "API 키 연결 성공" };
+        return { ok: true, message: "API key connection successful" };
       }
       if (account.sessionCookie) {
-        return { ok: true, message: "브라우저 세션 쿠키가 저장되어 있습니다." };
+        return { ok: true, message: "Browser session cookie is stored." };
       }
-      return { ok: false, message: "API 키 또는 브라우저 로그인이 필요합니다." };
+      return { ok: false, message: "API key or browser login required." };
     }
 
-    return { ok: false, message: "지원하지 않는 provider입니다." };
+    return { ok: false, message: "Unsupported provider." };
   } catch (error) {
     console.error("[testConnection] Error:", error);
-    return { ok: false, message: "연결 테스트 중 오류가 발생했습니다." };
+    return { ok: false, message: "Error during connection test." };
   }
 }
 
@@ -444,12 +444,12 @@ export async function fetchUsageForAccount(account: MonitorAccount, range: Resol
   }
 
   if (account.provider === "claude" && !account.sessionCookie) {
-    return emptyReport(account, "not_configured", "세션 쿠키가 비어 있습니다.");
+    return emptyReport(account, "not_configured", "Session cookie is empty.");
   }
 
   try {
     if (account.provider === "openai") {
-      // Admin API Key가 있으면 API 방식, 없으면 oh-my-codex 메트릭 읽기
+      // Use API method if Admin API Key is present, otherwise read oh-my-codex metrics
       if (account.apiKey) {
         return await fetchOpenAIUsage(account, range);
       }
@@ -458,6 +458,6 @@ export async function fetchUsageForAccount(account: MonitorAccount, range: Resol
     return await fetchClaudeUsage(account, range);
   } catch (error) {
     console.error("[fetchUsageForAccount] Error:", error);
-    return emptyReport(account, "error", "사용량 조회 중 오류가 발생했습니다.");
+    return emptyReport(account, "error", "Error fetching usage data.");
   }
 }

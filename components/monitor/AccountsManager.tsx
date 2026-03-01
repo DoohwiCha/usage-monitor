@@ -7,26 +7,13 @@ import type { ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/typ
 import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
 import LanguageSelector from "./LanguageSelector";
+import { ToggleSwitch, brandVar } from "./shared";
 
 interface AccountsResponse {
   ok: boolean;
   maxAccounts: number;
   accounts: PublicMonitorAccount[];
   error?: string;
-}
-
-function brandVar(provider: string) {
-  return provider === "claude" ? "var(--brand-claude)" : "var(--brand-openai)";
-}
-
-function ToggleSwitch({ checked, onChange, color }: { checked: boolean; onChange: (v: boolean) => void; color: string }) {
-  return (
-    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
-      className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-[var(--border-card)] transition-colors"
-      style={{ backgroundColor: checked ? color : "var(--text-dim)" }}>
-      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : "translate-x-0.5"} mt-0.5`} />
-    </button>
-  );
 }
 
 export default function AccountsManager() {
@@ -37,6 +24,7 @@ export default function AccountsManager() {
   const [error, setError] = useState<string | null>(null);
   const [newAccount, setNewAccount] = useState({ name: "", provider: "claude" as ProviderType, enabled: false, sessionCookie: "", apiKey: "", organizationId: "" });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const loadAccounts = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -45,7 +33,7 @@ export default function AccountsManager() {
       if (!res.ok || !json.ok) { setError(json.error || t("accounts.loadError")); setLoading(false); return; }
       setAccounts(json.accounts); setMaxAccounts(json.maxAccounts);
     } catch (err) { console.error(err); setError(t("accounts.apiCallError")); } finally { setLoading(false); }
-  }, [t]);
+  }, []);
 
   useEffect(() => { void loadAccounts(); }, [loadAccounts]);
 
@@ -145,7 +133,7 @@ export default function AccountsManager() {
             <input value={newAccount.name} onChange={(e) => setNewAccount((p) => ({ ...p, name: e.target.value }))} placeholder={t("accounts.accountName")}
               className="surface-input rounded-xl px-3 py-2.5 text-base border" />
             <div className="flex items-center gap-2 surface-input rounded-xl px-3 py-2.5 border">
-              <ToggleSwitch checked={newAccount.enabled} onChange={(v) => setNewAccount((p) => ({ ...p, enabled: v }))} color={brandVar(newAccount.provider)} />
+              <ToggleSwitch checked={newAccount.enabled} onChange={(v) => setNewAccount((p) => ({ ...p, enabled: v }))} color={brandVar(newAccount.provider)} label={t("enabled")} />
               <span className="text-base font-bold text-[var(--text-secondary)]">{t("enabled")}</span>
             </div>
             {newAccount.provider === "openai" && (
@@ -236,12 +224,16 @@ function AccCard({ account, idx, total, onMove, onPatch, onDelete }: {
             <button onClick={() => void onMove(idx, "up")} disabled={idx === 0} className="rounded bg-[var(--surface-raised)] text-[var(--text-muted)] px-1.5 py-0.5 text-xs font-bold disabled:opacity-20">▲</button>
             <button onClick={() => void onMove(idx, "down")} disabled={idx === total - 1} className="rounded bg-[var(--surface-raised)] text-[var(--text-muted)] px-1.5 py-0.5 text-xs font-bold disabled:opacity-20">▼</button>
           </div>
-          <ToggleSwitch checked={account.enabled} onChange={(v) => void onPatch(account.id, { enabled: v })} color={brand} />
+          <ToggleSwitch checked={account.enabled} onChange={(v) => void onPatch(account.id, { enabled: v })} color={brand} label={t("enabled")} />
         </div>
       </div>
       <div className="mt-2.5 flex gap-2">
         <Link href={`/monitor/accounts/${account.id}`} className="rounded-lg border border-[var(--border-card)] px-3 py-1.5 text-sm font-bold transition-all hover:border-[var(--border-hover)]" style={{ color: brand }}>{t("detail")}</Link>
-        <button onClick={() => void onDelete(account.id)} className="rounded-lg border border-[var(--border-card)] px-3 py-1.5 text-sm font-bold text-rose-400 hover:bg-[var(--error-bg)] transition-all">{t("delete")}</button>
+        <button
+          onClick={() => { if (window.confirm(t("accounts.confirmDelete"))) void onDelete(account.id); }}
+          className="rounded-lg border border-[var(--border-card)] px-3 py-1.5 text-sm font-bold text-rose-400 hover:bg-[var(--error-bg)] transition-all">
+          {t("delete")}
+        </button>
       </div>
     </div>
   );

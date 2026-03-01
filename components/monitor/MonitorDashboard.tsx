@@ -9,6 +9,11 @@ import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
 import LanguageSelector from "./LanguageSelector";
 
+function countDisplay(count: number, t: (key: string) => string): string {
+  const unit = t("countUnit");
+  return unit ? `${count}${unit}` : `${count}`;
+}
+
 function statusDot(status: AccountUsageReport["status"]): string {
   if (status === "ok") return "#10b981";
   if (status === "disabled") return "#71717a";
@@ -49,7 +54,7 @@ const cardVariants = {
 
 export default function MonitorDashboard({ username }: { username: string }) {
   const router = useRouter();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<UsageOverviewResponse | null>(null);
@@ -75,7 +80,8 @@ export default function MonitorDashboard({ username }: { username: string }) {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => { void loadUsage(); }, [loadUsage]);
   useEffect(() => {
@@ -108,11 +114,6 @@ export default function MonitorDashboard({ username }: { username: string }) {
     setRefreshing(false);
   }
 
-  function countDisplay(count: number): string {
-    const unit = t("countUnit");
-    return unit ? `${count} ${unit}` : `${count}`;
-  }
-
   return (
     <main className="min-h-screen surface-page">
       <div className="max-w-6xl mx-auto px-4 py-5 space-y-4">
@@ -120,7 +121,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
         {/* Header */}
         <div className="glass-card rounded-2xl px-5 py-4 flex items-center justify-between gap-3">
           <h1 className="text-3xl font-black gradient-text-brand">{t("usageMonitor")}</h1>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--surface-raised)]">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               {username}
@@ -128,7 +129,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
             <div className="flex items-center gap-1">
               {lastRefreshed && (
                 <span className="text-xs text-[var(--text-dim)] tabular-nums">
-                  {lastRefreshed.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  {lastRefreshed.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                 </span>
               )}
               <button
@@ -139,6 +140,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
                 <motion.svg
                   animate={{ rotate: refreshing ? 360 : 0 }}
                   transition={{ duration: 0.6, ease: "linear", repeat: refreshing ? Infinity : 0 }}
+                  aria-hidden="true"
                   width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
                   className="text-[var(--text-secondary)]"
                 >
@@ -198,7 +200,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-claude)]" />
                   <h2 className="text-xl font-black" style={{ color: "var(--brand-claude)" }}>Claude</h2>
-                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(claudeAccounts.length)}</span>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(claudeAccounts.length, t)}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
@@ -213,7 +215,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-openai)]" />
                   <h2 className="text-xl font-black" style={{ color: "var(--brand-openai)" }}>OpenAI</h2>
-                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(openaiAccounts.length)}</span>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(openaiAccounts.length, t)}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
@@ -295,11 +297,6 @@ function AccountCard({ account }: { account: AccountUsageReport }) {
 function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: AccountUsageReport[]; openaiAccounts: AccountUsageReport[] }) {
   const { t } = useTranslation();
 
-  function countDisplay(count: number): string {
-    const unit = t("countUnit");
-    return unit ? `${count} ${unit}` : `${count}`;
-  }
-
   function buildWindowMap(accs: AccountUsageReport[]) {
     const map = new Map<string, number[]>();
     for (const acc of accs) {
@@ -327,7 +324,7 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
           <div className="flex items-center gap-2 mb-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-claude)]" />
             <p className="text-base font-black" style={{ color: "var(--brand-claude)" }}>{t("dashboard.claudeAvg")}</p>
-            <span className="text-sm text-[var(--text-muted)]">{countDisplay(claudeAccounts.length)}</span>
+            <span className="text-sm text-[var(--text-muted)]">{countDisplay(claudeAccounts.length, t)}</span>
           </div>
           {claudeWindowMap.size > 0 ? (
             <div className="space-y-1.5">
@@ -344,7 +341,7 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
           <div className="flex items-center gap-2 mb-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-openai)]" />
             <p className="text-base font-black" style={{ color: "var(--brand-openai)" }}>{t("dashboard.openaiTotal")}</p>
-            <span className="text-sm text-[var(--text-muted)]">{countDisplay(openaiAccounts.length)}</span>
+            <span className="text-sm text-[var(--text-muted)]">{countDisplay(openaiAccounts.length, t)}</span>
           </div>
           {openaiWindowMap.size > 0 ? (
             <div className="space-y-1.5">

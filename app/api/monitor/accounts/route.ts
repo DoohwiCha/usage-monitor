@@ -21,7 +21,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   if (!verifyCsrfOrigin(request)) {
-    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+    return NextResponse.json({ ok: false, error: "Invalid request." }, { status: 403 });
   }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const provider = String(body.provider || "claude") as ProviderType;
   if (!PROVIDERS.includes(provider)) {
-    return NextResponse.json({ ok: false, error: "지원하지 않는 provider 입니다. (claude 또는 openai)" }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "Unsupported provider. (claude or openai)" }, { status: 400 });
   }
 
   try {
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, accounts: config.accounts.map(toPublicAccount) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "계정 추가 중 오류가 발생했습니다.";
+    const message = error instanceof Error ? error.message : "Error adding account.";
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }

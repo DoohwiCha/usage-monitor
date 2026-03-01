@@ -9,7 +9,7 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
-    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+    return NextResponse.json({ ok: false, error: "Invalid request." }, { status: 403 });
   }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
@@ -18,7 +18,7 @@ export async function POST(request: Request, context: RouteContext) {
   const config = await readMonitorConfig();
   const account = config.accounts.find((a) => a.id === id);
   if (!account) {
-    return NextResponse.json({ ok: false, error: "계정을 찾을 수 없습니다." }, { status: 404 });
+    return NextResponse.json({ ok: false, error: "Account not found." }, { status: 404 });
   }
 
   const result = await testConnection(account);

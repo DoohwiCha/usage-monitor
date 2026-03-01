@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { LocaleProvider } from "@/lib/i18n/context";
+import ErrorBoundary from "@/components/monitor/ErrorBoundary";
 import "./globals.css";
 
 const inter = Inter({
@@ -27,7 +28,9 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: initScript }} />
       </head>
       <body className="min-h-screen antialiased">
-        <LocaleProvider>{children}</LocaleProvider>
+        <ErrorBoundary>
+          <LocaleProvider>{children}</LocaleProvider>
+        </ErrorBoundary>
       </body>
     </html>
   );

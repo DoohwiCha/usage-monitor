@@ -12,7 +12,7 @@ function nowIso(): string {
 
 function maskSecret(secret: string): string {
   if (!secret) return "";
-  if (secret.length < 4) return "****";
+  if (secret.length <= 12) return "****";
   return `****${secret.slice(-4)}`;
 }
 
@@ -26,7 +26,10 @@ function getEncryptionKey(): Buffer | null {
 
 function encryptSecret(plain: string): string {
   const key = getEncryptionKey();
-  if (!key) return plain;
+  if (!key) {
+    if (process.env.NODE_ENV === "production") throw new Error("MONITOR_ENCRYPTION_KEY must be set in production");
+    return plain;
+  }
 
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -44,7 +47,10 @@ function decryptSecret(blob: string): string {
   }
 
   const key = getEncryptionKey();
-  if (!key) return blob; // No key available, return raw
+  if (!key) {
+    if (process.env.NODE_ENV === "production") throw new Error("MONITOR_ENCRYPTION_KEY must be set in production");
+    return blob; // No key available, return raw
+  }
 
   try {
     const iv = Buffer.from(parts[0], "hex");
@@ -55,8 +61,8 @@ function decryptSecret(blob: string): string {
     decipher.setAuthTag(tag);
     return decipher.update(ciphertext).toString("utf-8") + decipher.final("utf-8");
   } catch {
-    // Decryption failed (wrong key, corrupted data), return raw blob
-    return blob;
+    // Decryption failed (wrong key, corrupted data), return empty string
+    return "";
   }
 }
 
@@ -64,16 +70,16 @@ function decryptSecret(blob: string): string {
 
 function validateAccountInput(input: Partial<MonitorAccount>): void {
   if (input.name !== undefined && input.name.length > 200) {
-    throw new Error("계정 이름은 최대 200자까지 입력할 수 있습니다.");
+    throw new Error("Account name must be 200 characters or less.");
   }
   if (input.sessionCookie !== undefined && input.sessionCookie.length > 20000) {
-    throw new Error("세션 쿠키는 최대 20,000자(20KB)까지 입력할 수 있습니다.");
+    throw new Error("Session cookie must be 20,000 characters or less.");
   }
   if (input.apiKey !== undefined && input.apiKey.length > 500) {
-    throw new Error("API 키는 최대 500자까지 입력할 수 있습니다.");
+    throw new Error("API key must be 500 characters or less.");
   }
   if (input.organizationId !== undefined && input.organizationId.length > 500) {
-    throw new Error("조직 ID는 최대 500자까지 입력할 수 있습니다.");
+    throw new Error("Organization ID must be 500 characters or less.");
   }
 }
 
@@ -105,7 +111,7 @@ async function ensureStoreExists(): Promise<void> {
 function normalizeConfig(config: MonitorConfig): MonitorConfig {
   const safeAccounts: MonitorAccount[] = config.accounts.slice(0, MAX_ACCOUNTS).map((acct) => ({
     id: acct.id,
-    name: acct.name || "계정",
+    name: acct.name || "Account",
     provider: acct.provider,
     enabled: Boolean(acct.enabled),
     sessionCookie: acct.sessionCookie ? decryptSecret(acct.sessionCookie).trim() || undefined : undefined,
@@ -176,13 +182,13 @@ export async function addMonitorAccount(input: Partial<MonitorAccount>): Promise
 
   const config = await readMonitorConfig();
   if (config.accounts.length >= MAX_ACCOUNTS) {
-    throw new Error(`최대 ${MAX_ACCOUNTS}개 계정까지 추가할 수 있습니다.`);
+    throw new Error(`Maximum ${MAX_ACCOUNTS} accounts allowed.`);
   }
 
   const stamp = nowIso();
   const account: MonitorAccount = {
     id: randomUUID(),
-    name: input.name?.trim() || `${config.accounts.length + 1}번 계정`,
+    name: input.name?.trim() || `Account ${config.accounts.length + 1}`,
     provider: (input.provider as ProviderType) || "claude",
     enabled: Boolean(input.enabled),
     sessionCookie: input.sessionCookie?.trim() || undefined,
@@ -204,7 +210,7 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
   const config = await readMonitorConfig();
   const idx = config.accounts.findIndex((acct) => acct.id === id);
   if (idx < 0) {
-    throw new Error("계정을 찾을 수 없습니다.");
+    throw new Error("Account not found.");
   }
 
   const current = config.accounts[idx];
@@ -238,7 +244,7 @@ export async function reorderMonitorAccounts(orderedIds: string[]): Promise<Moni
       accountMap.delete(id);
     }
   }
-  // 누락된 계정은 뒤에 추가
+  // Append remaining accounts
   for (const acct of accountMap.values()) {
     reordered.push(acct);
   }
@@ -252,7 +258,7 @@ export async function deleteMonitorAccount(id: string): Promise<MonitorConfig> {
   const config = await readMonitorConfig();
   const filtered = config.accounts.filter((acct) => acct.id !== id);
   if (filtered.length === config.accounts.length) {
-    throw new Error("계정을 찾을 수 없습니다.");
+    throw new Error("Account not found.");
   }
 
   config.accounts = filtered;

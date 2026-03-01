@@ -21,7 +21,7 @@ export async function GET(request: Request) {
     : config.accounts;
 
   if (accountId && targetAccounts.length === 0) {
-    return NextResponse.json({ ok: false, error: "계정을 찾을 수 없습니다." }, { status: 404 });
+    return NextResponse.json({ ok: false, error: "Account not found." }, { status: 404 });
   }
 
   const reports = await Promise.all(targetAccounts.map((account) => fetchUsageForAccount(account, range)));

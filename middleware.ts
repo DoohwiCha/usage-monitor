@@ -17,6 +17,7 @@ async function verifySession(token: string): Promise<string | null> {
   if (!Number.isFinite(exp) || Date.now() > exp) return null;
 
   // HMAC-SHA256 verification using Web Crypto API (Edge compatible)
+  if (process.env.NODE_ENV === "production" && !process.env.MONITOR_SESSION_SECRET) throw new Error("MONITOR_SESSION_SECRET required");
   const secret = process.env.MONITOR_SESSION_SECRET || "change-this-monitor-session-secret";
   const key = await crypto.subtle.importKey(
     "raw",
@@ -29,7 +30,12 @@ async function verifySession(token: string): Promise<string | null> {
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
   const expected = Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
 
-  if (expected !== signature) return null;
+  const expectedBytes = new TextEncoder().encode(expected);
+  const signatureBytes = new TextEncoder().encode(signature);
+  if (expectedBytes.length !== signatureBytes.length) return null;
+  let diff = 0;
+  for (let i = 0; i < expectedBytes.length; i++) diff |= expectedBytes[i] ^ signatureBytes[i];
+  if (diff !== 0) return null;
   return username;
 }
 
@@ -39,7 +45,7 @@ export async function middleware(request: NextRequest) {
 
   if (!username) {
     if (request.nextUrl.pathname.startsWith("/api/monitor/")) {
-      return NextResponse.json({ ok: false, error: "인증이 필요합니다." }, { status: 401 });
+      return NextResponse.json({ ok: false, error: "Authentication required." }, { status: 401 });
     }
     return NextResponse.redirect(new URL("/monitor/login", request.url));
   }

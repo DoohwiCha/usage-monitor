@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { useTranslation } from "@/lib/i18n/context";
 import LanguageSelector from "./LanguageSelector";
+import { Spinner } from "./shared";
 
 export default function LoginForm() {
   const router = useRouter();
@@ -35,6 +36,8 @@ export default function LoginForm() {
 
       router.replace("/monitor");
       router.refresh();
+      // Reset loading in case navigation is slow
+      setLoading(false);
     } catch {
       setError(t("login.networkError"));
       setLoading(false);
@@ -119,6 +122,7 @@ export default function LoginForm() {
             {/* Error message */}
             {error && (
               <motion.div
+                role="alert"
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="rounded-xl px-4 py-3 text-base font-medium text-rose-300 bg-rose-500/10 border border-rose-500/20 backdrop-blur-sm"
@@ -135,26 +139,7 @@ export default function LoginForm() {
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
-                  <svg
-                    className="animate-spin w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                    />
-                  </svg>
+                  <Spinner className="w-4 h-4" />
                   {t("login.loggingIn")}
                 </span>
               ) : (

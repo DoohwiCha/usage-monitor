@@ -17,7 +17,7 @@ export async function GET(_: Request, context: RouteContext) {
   const account = config.accounts.find((a) => a.id === id);
 
   if (!account) {
-    return NextResponse.json({ ok: false, error: "계정을 찾을 수 없습니다." }, { status: 404 });
+    return NextResponse.json({ ok: false, error: "Account not found." }, { status: 404 });
   }
 
   return NextResponse.json({ ok: true, account: toPublicAccount(account) });
@@ -25,7 +25,7 @@ export async function GET(_: Request, context: RouteContext) {
 
 export async function PATCH(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
-    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+    return NextResponse.json({ ok: false, error: "Invalid request." }, { status: 403 });
   }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
@@ -36,7 +36,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   const provider = providerRaw as ProviderType | undefined;
 
   if (provider && !PROVIDERS.includes(provider)) {
-    return NextResponse.json({ ok: false, error: "지원하지 않는 provider 입니다. (claude 또는 openai)" }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "Unsupported provider. (claude or openai)" }, { status: 400 });
   }
 
   try {
@@ -51,14 +51,14 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return NextResponse.json({ ok: true, accounts: config.accounts.map(toPublicAccount) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "계정 수정 중 오류가 발생했습니다.";
+    const message = error instanceof Error ? error.message : "Error updating account.";
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }
 
 export async function DELETE(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
-    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+    return NextResponse.json({ ok: false, error: "Invalid request." }, { status: 403 });
   }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
@@ -69,7 +69,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     const config = await deleteMonitorAccount(id);
     return NextResponse.json({ ok: true, accounts: config.accounts.map(toPublicAccount) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "계정 삭제 중 오류가 발생했습니다.";
+    const message = error instanceof Error ? error.message : "Error deleting account.";
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }

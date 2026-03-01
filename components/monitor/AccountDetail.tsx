@@ -7,23 +7,7 @@ import type { AccountUsageReport, UtilizationWindow, ProviderType, PublicMonitor
 import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
 import LanguageSelector from "./LanguageSelector";
-
-function brandVar(p: string) { return p === "claude" ? "var(--brand-claude)" : "var(--brand-openai)"; }
-function brandLightVar(p: string) { return p === "claude" ? "var(--brand-claude-light)" : "var(--brand-openai-light)"; }
-
-function Spinner() {
-  return <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>;
-}
-
-function ToggleSwitch({ checked, onChange, color }: { checked: boolean; onChange: (v: boolean) => void; color: string }) {
-  return (
-    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
-      className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-[var(--border-card)] transition-colors"
-      style={{ backgroundColor: checked ? color : "var(--text-dim)" }}>
-      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : "translate-x-0.5"} mt-0.5`} />
-    </button>
-  );
-}
+import { ToggleSwitch, Spinner, brandVar, brandLightVar } from "./shared";
 
 export default function AccountDetail({ id }: { id: string }) {
   const { t } = useTranslation();
@@ -38,6 +22,7 @@ export default function AccountDetail({ id }: { id: string }) {
   const [openaiLogging, setOpenaiLogging] = useState(false);
   const [form, setForm] = useState({ name: "", provider: "claude" as ProviderType, enabled: false, sessionCookie: "", apiKey: "", organizationId: "" });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -47,13 +32,13 @@ export default function AccountDetail({ id }: { id: string }) {
       ]);
       const aJson = (await aRes.json()) as { ok: boolean; account?: PublicMonitorAccount; error?: string };
       const uJson = (await uRes.json()) as { ok: boolean; accounts?: AccountUsageReport[]; error?: string };
-      if (!aRes.ok || !aJson.ok || !aJson.account) { setError(aJson.error || t("detail.loadAccountError")); setLoading(false); return; }
-      if (!uRes.ok || !uJson.ok || !uJson.accounts?.[0]) { setError(uJson.error || t("detail.loadUsageError")); setLoading(false); return; }
+      if (!aRes.ok || !aJson.ok || !aJson.account) { setError(aJson.error || "detail.loadAccountError"); setLoading(false); return; }
+      if (!uRes.ok || !uJson.ok || !uJson.accounts?.[0]) { setError(uJson.error || "detail.loadUsageError"); setLoading(false); return; }
       setAccount(aJson.account);
       setForm({ name: aJson.account.name, provider: aJson.account.provider, enabled: aJson.account.enabled, sessionCookie: "", apiKey: "", organizationId: aJson.account.organizationId || "" });
       setReport(uJson.accounts[0]);
-    } catch { setError(t("detail.apiCallError")); } finally { setLoading(false); }
-  }, [id, t]);
+    } catch { setError("detail.apiCallError"); } finally { setLoading(false); }
+  }, [id]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { const timer = window.setInterval(() => { void load(); }, 60_000); return () => window.clearInterval(timer); }, [load]);
@@ -61,6 +46,8 @@ export default function AccountDetail({ id }: { id: string }) {
   const title = useMemo(() => account?.name || "Account", [account]);
   const isClaude = form.provider === "claude";
   const brand = brandVar(form.provider);
+
+  const errorMsg = error ? (t(error as Parameters<typeof t>[0]) || error) : null;
 
   async function saveAccount() {
     setSaving(true); setSaveMessage(null); setError(null);
@@ -70,9 +57,9 @@ export default function AccountDetail({ id }: { id: string }) {
       if (form.apiKey.trim()) payload.apiKey = form.apiKey.trim();
       const res = await fetch(`/api/monitor/accounts/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!res.ok || !json.ok) { setError(json.error || t("detail.saveError")); setSaving(false); return; }
+      if (!res.ok || !json.ok) { setError(json.error || "detail.saveError"); setSaving(false); return; }
       setSaveMessage(t("detail.saved")); setForm((p) => ({ ...p, sessionCookie: "", apiKey: "" })); await load();
-    } catch { setError(t("detail.saveApiError")); } finally { setSaving(false); }
+    } catch { setError("detail.saveApiError"); } finally { setSaving(false); }
   }
 
   async function handleProviderLogin(provider: "claude" | "openai") {
@@ -81,9 +68,9 @@ export default function AccountDetail({ id }: { id: string }) {
     try {
       const res = await fetch(`/api/monitor/accounts/${id}/${provider}-login`, { method: "POST" });
       const json = (await res.json()) as { ok: boolean; message?: string; error?: string };
-      if (!res.ok || !json.ok) setError(json.error || t("detail.loginFailed"));
+      if (!res.ok || !json.ok) setError(json.error || "detail.loginFailed");
       else { setSaveMessage(json.message || t("detail.loginSuccess")); void load(); }
-    } catch (err) { console.error(err); setError(t("detail.loginErrorGeneric")); } finally { setL(false); }
+    } catch (err) { console.error(err); setError("detail.loginErrorGeneric"); } finally { setL(false); }
   }
 
   async function handleTestConnection() {
@@ -91,9 +78,9 @@ export default function AccountDetail({ id }: { id: string }) {
     try {
       const res = await fetch(`/api/monitor/accounts/${id}/connect`, { method: "POST" });
       const json = (await res.json()) as { ok: boolean; account?: PublicMonitorAccount; error?: string; message?: string };
-      if (!res.ok || !json.ok) { setError(json.error || t("detail.connectError")); if (json.account) setAccount(json.account); return; }
+      if (!res.ok || !json.ok) { setError(json.error || "detail.connectError"); if (json.account) setAccount(json.account); return; }
       setSaveMessage(json.message || t("detail.connectSuccess")); if (json.account) setAccount(json.account); await load();
-    } catch { setError(t("detail.connectError")); } finally { setConnecting(false); }
+    } catch { setError("detail.connectError"); } finally { setConnecting(false); }
   }
 
   return (
@@ -122,9 +109,9 @@ export default function AccountDetail({ id }: { id: string }) {
 
         {/* Banners */}
         <AnimatePresence>
-          {error && (
+          {errorMsg && (
             <motion.div key="err" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
-              className="rounded-xl p-4 text-base font-bold text-rose-400" style={{ background: "var(--error-bg)", border: "1px solid var(--error-border)" }}>{error}</motion.div>
+              className="rounded-xl p-4 text-base font-bold text-rose-400" style={{ background: "var(--error-bg)", border: "1px solid var(--error-border)" }}>{errorMsg}</motion.div>
           )}
           {saveMessage && (
             <motion.div key="ok" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
@@ -138,7 +125,7 @@ export default function AccountDetail({ id }: { id: string }) {
             <h2 className="text-lg font-black text-[var(--text-heading)]">{t("detail.accountSettings")}</h2>
             <div className="flex items-center gap-2">
               <span className="text-base font-bold text-[var(--text-muted)]">{t("enabled")}</span>
-              <ToggleSwitch checked={form.enabled} onChange={(v) => setForm((p) => ({ ...p, enabled: v }))} color={brand} />
+              <ToggleSwitch checked={form.enabled} onChange={(v) => setForm((p) => ({ ...p, enabled: v }))} color={brand} label={t("enabled")} />
             </div>
           </div>
 
@@ -173,7 +160,7 @@ export default function AccountDetail({ id }: { id: string }) {
                   disabled={isClaude ? claudeLogging : openaiLogging}
                   className="inline-flex items-center gap-2 rounded-xl text-white px-4 py-2.5 font-bold text-base disabled:opacity-50 transition-all"
                   style={{ background: `linear-gradient(to right, ${brand}, ${brandLightVar(form.provider)})` }}>
-                  {(isClaude ? claudeLogging : openaiLogging) && <Spinner />}
+                  {(isClaude ? claudeLogging : openaiLogging) && <Spinner className="h-4 w-4" />}
                   {(isClaude ? claudeLogging : openaiLogging) ? t("detail.loggingInMax") : (isClaude ? t("detail.claudeLogin") : t("detail.openaiLogin"))}
                 </button>
               </div>
@@ -186,11 +173,11 @@ export default function AccountDetail({ id }: { id: string }) {
                   {isClaude ? (
                     <input type="password" value={form.sessionCookie} onChange={(e) => setForm((p) => ({ ...p, sessionCookie: e.target.value }))}
                       className="surface-input rounded-xl px-3 py-2.5 text-base border md:col-span-2"
-                      placeholder={account?.sessionCookieMasked ? `현재: ${account.sessionCookieMasked}` : "sessionKey=sk-ant-sid01-..."} />
+                      placeholder={account?.sessionCookieMasked ? `${t("detail.current")}: ${account.sessionCookieMasked}` : "sessionKey=sk-ant-sid01-..."} />
                   ) : (
                     <>
                       <input type="password" value={form.apiKey} onChange={(e) => setForm((p) => ({ ...p, apiKey: e.target.value }))}
-                        className="surface-input rounded-xl px-3 py-2.5 text-base border" placeholder={account?.apiKeyMasked ? `현재: ${account.apiKeyMasked}` : "sk-admin-..."} />
+                        className="surface-input rounded-xl px-3 py-2.5 text-base border" placeholder={account?.apiKeyMasked ? `${t("detail.current")}: ${account.apiKeyMasked}` : "sk-admin-..."} />
                       <input value={form.organizationId} onChange={(e) => setForm((p) => ({ ...p, organizationId: e.target.value }))}
                         className="surface-input rounded-xl px-3 py-2.5 text-base border" placeholder="org-..." />
                     </>
@@ -203,12 +190,12 @@ export default function AccountDetail({ id }: { id: string }) {
           {/* Credential status */}
           <div className="rounded-lg bg-[var(--surface-raised)] px-4 py-3 text-sm font-semibold text-[var(--text-muted)] space-y-1">
             {isClaude ? (
-              <p>쿠키: <span className="text-[var(--text-secondary)]">{account?.sessionCookieMasked || "(없음)"}</span></p>
+              <p>{t("accounts.cookie")}: <span className="text-[var(--text-secondary)]">{account?.sessionCookieMasked || t("accounts.none")}</span></p>
             ) : (
               <>
-                <p>쿠키: <span className="text-[var(--text-secondary)]">{account?.sessionCookieMasked || "(없음)"}</span></p>
-                <p>API 키: <span className="text-[var(--text-secondary)]">{account?.apiKeyMasked || "(없음)"}</span></p>
-                <p>Org: <span className="text-[var(--text-secondary)]">{account?.organizationId || "(없음)"}</span></p>
+                <p>{t("accounts.cookie")}: <span className="text-[var(--text-secondary)]">{account?.sessionCookieMasked || t("accounts.none")}</span></p>
+                <p>{t("accounts.key")}: <span className="text-[var(--text-secondary)]">{account?.apiKeyMasked || t("accounts.none")}</span></p>
+                <p>{t("detail.orgLabel")}: <span className="text-[var(--text-secondary)]">{account?.organizationId || t("accounts.none")}</span></p>
               </>
             )}
           </div>
@@ -217,18 +204,26 @@ export default function AccountDetail({ id }: { id: string }) {
             <button onClick={() => void saveAccount()} disabled={saving}
               className="inline-flex items-center gap-2 rounded-xl text-white px-4 py-2.5 font-bold text-base disabled:opacity-50"
               style={{ background: `linear-gradient(to right, ${brand}, ${brandLightVar(form.provider)})` }}>
-              {saving && <Spinner />}{saving ? t("detail.saving") : t("detail.saveSettings")}
+              {saving && <Spinner className="h-4 w-4" />}{saving ? t("detail.saving") : t("detail.saveSettings")}
             </button>
             <button onClick={() => void handleTestConnection()} disabled={connecting}
               className="inline-flex items-center gap-2 rounded-xl border border-[var(--border-card)] px-4 py-2.5 font-bold text-base text-[var(--text-body)] hover:border-[var(--border-hover)] disabled:opacity-50 transition-all">
-              {connecting && <Spinner />}{connecting ? t("detail.testing") : t("detail.testConnection")}
+              {connecting && <Spinner className="h-4 w-4" />}{connecting ? t("detail.testing") : t("detail.testConnection")}
             </button>
           </div>
         </div>
 
         {/* Usage */}
         {loading ? (
-          <div className="glass-card rounded-xl p-6 text-center text-[var(--text-muted)] font-bold text-lg">{t("loading")}</div>
+          <div className="space-y-5">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="glass-card rounded-2xl p-6 animate-pulse">
+                <div className="h-6 w-48 rounded-lg bg-[var(--surface-raised)] mb-4" />
+                <div className="h-4 w-full rounded-lg bg-[var(--surface-raised)] mb-2" />
+                <div className="h-4 w-2/3 rounded-lg bg-[var(--surface-raised)]" />
+              </div>
+            ))}
+          </div>
         ) : report && (
           <div className="space-y-3">
             {/* Utilization */}
@@ -298,7 +293,7 @@ export default function AccountDetail({ id }: { id: string }) {
               </>
             )}
 
-            {report.error && <div className="rounded-xl p-4 text-base font-bold text-rose-400" style={{ background: "var(--error-bg)" }}>오류: {report.error}</div>}
+            {report.error && <div className="rounded-xl p-4 text-base font-bold text-rose-400" style={{ background: "var(--error-bg)" }}>{t("detail.errorPrefix")}: {report.error}</div>}
           </div>
         )}
       </div>
