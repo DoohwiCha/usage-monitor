@@ -1,7 +1,210 @@
 @import "tailwindcss";
 
+/* ── Theme: Dark (default) ─────────────────────────────────── */
+:root,
+[data-theme="dark"] {
+  --surface-page: #09090b;
+  --surface-card: rgba(255, 255, 255, 0.03);
+  --surface-card-hover: rgba(255, 255, 255, 0.05);
+  --surface-input: #18181b;
+  --surface-raised: rgba(255, 255, 255, 0.04);
+  --border-card: rgba(255, 255, 255, 0.06);
+  --border-input: #27272a;
+  --border-hover: rgba(255, 255, 255, 0.1);
+  --text-heading: #fafafa;
+  --text-body: #d4d4d8;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-dim: #52525b;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --scrollbar-hover: rgba(255, 255, 255, 0.2);
+  --dot-pattern: rgba(255, 255, 255, 0.04);
+  --error-bg: rgba(239, 68, 68, 0.08);
+  --error-border: rgba(239, 68, 68, 0.2);
+  --success-bg: rgba(16, 185, 129, 0.08);
+  --success-border: rgba(16, 185, 129, 0.2);
+  /* Brand: Claude (Anthropic coral/terracotta) */
+  --brand-claude: #D97757;
+  --brand-claude-light: #E8956F;
+  --brand-claude-dark: #C4603D;
+  /* Brand: OpenAI (teal green) */
+  --brand-openai: #10A37F;
+  --brand-openai-light: #1DC18B;
+  --brand-openai-dark: #0D8A6A;
+  color-scheme: dark;
+}
+
+/* ── Theme: Light ──────────────────────────────────────────── */
+[data-theme="light"] {
+  --surface-page: #f8fafc;
+  --surface-card: rgba(255, 255, 255, 0.85);
+  --surface-card-hover: rgba(255, 255, 255, 0.95);
+  --surface-input: #f1f5f9;
+  --surface-raised: #f1f5f9;
+  --border-card: rgba(0, 0, 0, 0.08);
+  --border-input: #e2e8f0;
+  --border-hover: rgba(0, 0, 0, 0.15);
+  --text-heading: #0f172a;
+  --text-body: #334155;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --text-dim: #cbd5e1;
+  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --scrollbar-hover: rgba(0, 0, 0, 0.25);
+  --dot-pattern: rgba(0, 0, 0, 0.04);
+  --error-bg: rgba(239, 68, 68, 0.06);
+  --error-border: rgba(239, 68, 68, 0.15);
+  --success-bg: rgba(16, 185, 129, 0.06);
+  --success-border: rgba(16, 185, 129, 0.15);
+  --brand-claude: #C4603D;
+  --brand-claude-light: #D97757;
+  --brand-claude-dark: #B5522F;
+  --brand-openai: #0D8A6A;
+  --brand-openai-light: #10A37F;
+  --brand-openai-dark: #0A7055;
+  color-scheme: light;
+}
+
+/* ── Base ───────────────────────────────────────────────────── */
+html,
 body {
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  background: #f8fafc;
+  background-color: var(--surface-page);
+  color: var(--text-heading);
   min-height: 100vh;
+}
+
+body {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+
+/* ── Glass card ─────────────────────────────────────────────── */
+.glass-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.glass-card:hover {
+  border-color: var(--border-hover);
+}
+
+/* ── Theme surface classes ─────────────────────────────────── */
+.surface-page {
+  background-color: var(--surface-page);
+}
+.surface-input {
+  background-color: var(--surface-input);
+  border-color: var(--border-input);
+  color: var(--text-heading);
+}
+.surface-input::placeholder {
+  color: var(--text-muted);
+}
+.surface-input:focus {
+  outline: none;
+  border-color: var(--brand-claude);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.12);
+}
+.surface-raised {
+  background-color: var(--surface-raised);
+}
+.text-heading {
+  color: var(--text-heading);
+}
+.text-body {
+  color: var(--text-body);
+}
+.text-secondary {
+  color: var(--text-secondary);
+}
+.text-muted {
+  color: var(--text-muted);
+}
+.border-card {
+  border-color: var(--border-card);
+}
+.border-input {
+  border-color: var(--border-input);
+}
+
+/* ── Glow effects ───────────────────────────────────────────── */
+.glow-claude {
+  box-shadow: 0 0 20px rgba(217, 119, 87, 0.25), 0 0 60px rgba(217, 119, 87, 0.08);
+}
+
+.glow-openai {
+  box-shadow: 0 0 20px rgba(16, 163, 127, 0.25), 0 0 60px rgba(16, 163, 127, 0.08);
+}
+
+/* ── Input focus glow ───────────────────────────────────────── */
+.input-focus-brand:focus {
+  outline: none;
+  border-color: var(--brand-claude);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.12), 0 0 12px rgba(217, 119, 87, 0.15);
+}
+
+/* ── Smooth transitions ─────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Disable transitions on elements that shouldn't animate */
+[data-no-transition],
+[data-no-transition] * {
+  transition: none !important;
+}
+
+/* ── Gradient text ──────────────────────────────────────────── */
+.gradient-text-brand {
+  background: linear-gradient(135deg, var(--brand-claude) 0%, var(--brand-claude-light) 50%, var(--brand-openai) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Dot pattern background ─────────────────────────────────── */
+.dot-pattern {
+  background-image: radial-gradient(var(--dot-pattern) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ── Gradient top border ────────────────────────────────────── */
+.gradient-border-top::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--brand-claude), var(--brand-openai));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ── Light mode specific overrides ─────────────────────────── */
+[data-theme="light"] .glass-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
 }

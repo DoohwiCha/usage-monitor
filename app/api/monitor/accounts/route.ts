@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { addMonitorAccount, readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
-import { ensureApiAuth } from "@/lib/usage-monitor/api-auth";
+import { ensureApiAuth, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import type { ProviderType } from "@/lib/usage-monitor/types";
 
 export const runtime = "nodejs";
@@ -20,6 +20,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  if (!verifyCsrfOrigin(request)) {
+    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+  }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
 

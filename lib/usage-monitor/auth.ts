@@ -4,7 +4,14 @@ const SESSION_COOKIE = "usage_monitor_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 
 function getAuthSecret(): string {
-  return process.env.MONITOR_SESSION_SECRET || "change-this-monitor-session-secret";
+  const secret = process.env.MONITOR_SESSION_SECRET;
+  if (process.env.NODE_ENV === "production") {
+    if (!secret || secret === "change-this-monitor-session-secret") {
+      throw new Error("MONITOR_SESSION_SECRET must be set to a secure value in production.");
+    }
+    return secret;
+  }
+  return secret || "change-this-monitor-session-secret";
 }
 
 function getAdminUser(): string {
@@ -12,7 +19,14 @@ function getAdminUser(): string {
 }
 
 function getAdminPass(): string {
-  return process.env.MONITOR_ADMIN_PASS || "admin1234";
+  const pass = process.env.MONITOR_ADMIN_PASS;
+  if (process.env.NODE_ENV === "production") {
+    if (!pass || pass === "admin1234") {
+      throw new Error("MONITOR_ADMIN_PASS must be set to a secure value in production.");
+    }
+    return pass;
+  }
+  return pass || "admin1234";
 }
 
 function sign(value: string): string {
@@ -53,16 +67,21 @@ export function readSessionUsername(token: string | undefined | null): string | 
 }
 
 export function isValidCredential(username: string, password: string): boolean {
-  return username === getAdminUser() && password === getAdminPass();
+  const expectedUser = getAdminUser();
+  const expectedPass = getAdminPass();
+  const maxUserLen = Math.max(username.length, expectedUser.length);
+  const maxPassLen = Math.max(password.length, expectedPass.length);
+  const userMatch = timingSafeEqual(
+    Buffer.from(username.padEnd(maxUserLen, "\0")),
+    Buffer.from(expectedUser.padEnd(maxUserLen, "\0")),
+  );
+  const passMatch = timingSafeEqual(
+    Buffer.from(password.padEnd(maxPassLen, "\0")),
+    Buffer.from(expectedPass.padEnd(maxPassLen, "\0")),
+  );
+  return userMatch && passMatch;
 }
 
 export function getSessionCookieName(): string {
   return SESSION_COOKIE;
-}
-
-export function getDefaultLoginHint(): { username: string; password: string } {
-  return {
-    username: getAdminUser(),
-    password: getAdminPass(),
-  };
 }

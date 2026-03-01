@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteMonitorAccount, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
-import { ensureApiAuth } from "@/lib/usage-monitor/api-auth";
+import { ensureApiAuth, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import type { ProviderType } from "@/lib/usage-monitor/types";
 
 export const runtime = "nodejs";
@@ -24,6 +24,9 @@ export async function GET(_: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  if (!verifyCsrfOrigin(request)) {
+    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+  }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
 
@@ -53,7 +56,10 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 }
 
-export async function DELETE(_: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
+  if (!verifyCsrfOrigin(request)) {
+    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+  }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
 

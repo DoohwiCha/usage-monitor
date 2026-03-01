@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ensureApiAuth } from "@/lib/usage-monitor/api-auth";
+import { ensureApiAuth, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import { readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
 import { testConnection } from "@/lib/usage-monitor/usage-adapters";
 
@@ -7,7 +7,10 @@ export const runtime = "nodejs";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function POST(_: Request, context: RouteContext) {
+export async function POST(request: Request, context: RouteContext) {
+  if (!verifyCsrfOrigin(request)) {
+    return NextResponse.json({ ok: false, error: "잘못된 요청입니다." }, { status: 403 });
+  }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
 

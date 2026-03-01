@@ -9,17 +9,15 @@ export default async function MonitorLoginPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
-        <h1 className="text-2xl font-black text-slate-900 mb-1">사용량 모니터 로그인</h1>
-        <p className="text-sm font-medium text-slate-600 mb-4">
-          4개 기본 계정부터 시작하고 최대 12개 계정까지 확장 가능합니다.
-        </p>
-        <LoginForm />
-        <div className="mt-4 text-xs text-slate-500 font-medium">
-          기본 계정은 `admin / admin1234` 입니다. 운영 시 `MONITOR_ADMIN_USER`, `MONITOR_ADMIN_PASS`, `MONITOR_SESSION_SECRET` 환경변수로 변경하세요.
-        </div>
+    <main className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden surface-page dot-pattern">
+      {/* Ambient glow blobs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -top-40 -left-40 w-80 h-80 rounded-full blur-3xl" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 10%, transparent)" }} />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 rounded-full blur-3xl" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 8%, transparent)" }} />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] rounded-full blur-3xl" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 5%, transparent)" }} />
       </div>
+
+      <LoginForm />
     </main>
   );
 }

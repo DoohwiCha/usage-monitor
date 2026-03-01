@@ -1,5 +1,11 @@
 export type ProviderType = "claude" | "openai";
 
+export interface SubscriptionInfo {
+  plan?: string;
+  renewsAt?: string;
+  billingPeriod?: string;
+}
+
 export interface MonitorAccount {
   id: string;
   name: string;
@@ -11,6 +17,8 @@ export interface MonitorAccount {
   apiKey?: string;
   /** OpenAI: Organization ID */
   organizationId?: string;
+  /** Subscription/plan info (extracted during browser login) */
+  subscriptionInfo?: SubscriptionInfo;
   createdAt: string;
   updatedAt: string;
 }
@@ -32,6 +40,7 @@ export interface PublicMonitorAccount {
   hasApiKey: boolean;
   apiKeyMasked: string;
   organizationId?: string;
+  subscriptionInfo?: SubscriptionInfo;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,14 +66,14 @@ export interface UsagePoint {
 
 export type UsageStatus = "ok" | "disabled" | "not_configured" | "error";
 
-export interface ClaudeUtilizationWindow {
-  label: string;
-  utilization: number; // 0–1
+export interface UtilizationWindow {
+  label: string;       // "5h", "7d", "wk" etc.
+  utilization: number; // 0–100
   resetsAt: string | null;
 }
 
-export interface ClaudeUsageInfo {
-  windows: ClaudeUtilizationWindow[];
+export interface ProviderUsageInfo {
+  windows: UtilizationWindow[];
   billing?: {
     status: string;
     nextChargeDate: string | null;
@@ -86,7 +95,7 @@ export interface AccountUsageReport {
   requests: number;
   tokens: number;
   points: UsagePoint[];
-  claudeUsage?: ClaudeUsageInfo;
+  usageInfo?: ProviderUsageInfo;
   error?: string;
 }
 

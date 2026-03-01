@@ -1,4 +1,4 @@
-import type { AccountUsageReport, ClaudeUsageInfo, ClaudeUtilizationWindow, MonitorAccount, ResolvedRange, UsagePoint } from "@/lib/usage-monitor/types";
+import type { AccountUsageReport, ProviderUsageInfo, UtilizationWindow, MonitorAccount, ResolvedRange, UsagePoint } from "@/lib/usage-monitor/types";
 import { toUtcDayKey } from "@/lib/usage-monitor/range";
 
 function toNumber(value: unknown): number {
@@ -71,7 +71,8 @@ async function fetchJson(url: string, headers: HeadersInit): Promise<unknown> {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`HTTP ${response.status}: ${body.slice(0, 240)}`);
+    console.error(`[fetchJson] HTTP ${response.status} from ${url}:`, body.slice(0, 500));
+    throw new Error(`외부 API 요청 실패 (HTTP ${response.status})`);
   }
 
   return response.json();
@@ -151,9 +152,61 @@ async function fetchOpenAIUsage(account: MonitorAccount, range: ResolvedRange): 
   return sumReport(account, "ok", points);
 }
 
+// ─── OpenAI (oh-my-codex 메트릭 파일 읽기) ───────────────────────
+
+async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<AccountUsageReport> {
+  const fs = await import("fs/promises");
+  const path = await import("path");
+  const metricsPath = path.join(process.env.HOME || "/root", ".omx", "metrics.json");
+
+  try {
+    const raw = await fs.readFile(metricsPath, "utf-8");
+    const metrics = JSON.parse(raw) as {
+      five_hour_limit_pct?: number;
+      weekly_limit_pct?: number;
+      last_activity?: string;
+    };
+
+    const windows: UtilizationWindow[] = [];
+
+    if (typeof metrics.five_hour_limit_pct === "number") {
+      windows.push({
+        label: "5h",
+        utilization: Math.min(Math.round(metrics.five_hour_limit_pct), 100),
+        resetsAt: null,
+      });
+    }
+    if (typeof metrics.weekly_limit_pct === "number") {
+      windows.push({
+        label: "wk",
+        utilization: Math.min(Math.round(metrics.weekly_limit_pct), 100),
+        resetsAt: null,
+      });
+    }
+
+    // 로그인 시 저장된 구독 정보
+    let billing: ProviderUsageInfo["billing"] | undefined;
+    if (account.subscriptionInfo?.plan) {
+      billing = {
+        status: account.subscriptionInfo.plan,
+        nextChargeDate: account.subscriptionInfo.renewsAt || null,
+        interval: account.subscriptionInfo.billingPeriod || null,
+      };
+    }
+
+    const report = emptyReport(account, "ok");
+    if (windows.length > 0 || billing) {
+      report.usageInfo = { windows, billing };
+    }
+    return report;
+  } catch {
+    return emptyReport(account, "ok", "oh-my-codex 메트릭을 찾을 수 없습니다 (~/.omx/metrics.json)");
+  }
+}
+
 // ─── Claude (Session Cookie + Playwright) ────────────────────────
 
-function parseCookieString(cookieStr: string): Array<{ name: string; value: string; domain: string; path: string }> {
+function parseCookieString(cookieStr: string, domain = ".claude.ai"): Array<{ name: string; value: string; domain: string; path: string; secure?: boolean }> {
   return cookieStr
     .split(";")
     .map((part) => part.trim())
@@ -161,14 +214,22 @@ function parseCookieString(cookieStr: string): Array<{ name: string; value: stri
     .map((part) => {
       const eqIdx = part.indexOf("=");
       if (eqIdx <= 0) return null;
-      return {
-        name: part.slice(0, eqIdx).trim(),
-        value: part.slice(eqIdx + 1).trim(),
-        domain: ".claude.ai",
-        path: "/",
-      };
+      const name = part.slice(0, eqIdx).trim();
+      const value = part.slice(eqIdx + 1).trim();
+      if (!name) return null;
+
+      // __Host- 쿠키는 domain 없이, secure + path=/ 필수
+      if (name.startsWith("__Host-")) {
+        return { name, value, domain: domain.replace(/^\./, ""), path: "/", secure: true };
+      }
+      // __Secure- 쿠키는 secure 필수
+      if (name.startsWith("__Secure-")) {
+        return { name, value, domain, path: "/", secure: true };
+      }
+
+      return { name, value, domain, path: "/" };
     })
-    .filter((c): c is { name: string; value: string; domain: string; path: string } => c !== null && c.name.length > 0);
+    .filter((c): c is { name: string; value: string; domain: string; path: string; secure?: boolean } => c !== null);
 }
 
 async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange): Promise<AccountUsageReport> {
@@ -207,7 +268,6 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
     // 로그인 리다이렉트 확인
     const currentUrl = page.url();
     if (currentUrl.includes("/login") || currentUrl.includes("/oauth") || currentUrl.includes("/sso")) {
-      await browser.close();
       return emptyReport(account, "error", "세션 쿠키가 만료되었습니다. 다시 로그인해 주세요.");
     }
 
@@ -233,14 +293,12 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
       }
     });
 
-    await browser.close();
-
     if (!evalResult || "error" in evalResult) {
       const errMsg = evalResult && "error" in evalResult ? String(evalResult.error) : "데이터 조회 실패";
       return emptyReport(account, "error", errMsg);
     }
 
-    const claudeUsage = parseClaudeUsageInfo(evalResult.results || []);
+    const usageInfo = parseClaudeUsageInfo(evalResult.results || []);
 
     return {
       accountId: account.id,
@@ -251,11 +309,11 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
       requests: 0,
       tokens: 0,
       points: [],
-      claudeUsage,
+      usageInfo,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return emptyReport(account, "error", `사용량 조회 실패: ${message}`);
+    console.error("[fetchClaudeUsage] Error:", error);
+    return emptyReport(account, "error", "Claude 사용량 조회에 실패했습니다.");
   } finally {
     await browser.close().catch(() => {});
   }
@@ -267,19 +325,19 @@ interface ClaudeUtilizationRaw {
 }
 
 const CLAUDE_WINDOW_LABELS: Record<string, string> = {
-  five_hour: "5시간",
-  seven_day: "7일",
-  seven_day_opus: "7일 (Opus)",
-  seven_day_sonnet: "7일 (Sonnet)",
-  seven_day_cowork: "7일 (Cowork)",
-  seven_day_oauth_apps: "7일 (OAuth)",
-  iguana_necktie: "기타",
+  five_hour: "5h",
+  seven_day: "7d",
+  seven_day_opus: "7d Opus",
+  seven_day_sonnet: "7d Sonnet",
+  seven_day_cowork: "7d Cowork",
+  seven_day_oauth_apps: "7d OAuth",
+  iguana_necktie: "etc",
 };
 
-function parseClaudeUsageInfo(dataList: unknown[]): ClaudeUsageInfo {
-  const windows: ClaudeUtilizationWindow[] = [];
-  let billing: ClaudeUsageInfo["billing"] | undefined;
-  let extraUsage: ClaudeUsageInfo["extraUsage"] | undefined;
+function parseClaudeUsageInfo(dataList: unknown[]): ProviderUsageInfo {
+  const windows: UtilizationWindow[] = [];
+  let billing: ProviderUsageInfo["billing"] | undefined;
+  let extraUsage: ProviderUsageInfo["extraUsage"] | undefined;
 
   for (const raw of dataList) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
@@ -360,20 +418,21 @@ export async function testConnection(account: MonitorAccount): Promise<Connectio
     }
 
     if (account.provider === "openai") {
-      if (!account.apiKey) {
-        return { ok: false, message: "API 키가 입력되지 않았습니다." };
+      if (account.apiKey) {
+        const headers = buildOpenAIHeaders(account);
+        await fetchJson("https://api.openai.com/v1/organization/costs?start_time=0&end_time=1&bucket_width=1d", headers);
+        return { ok: true, message: "API 키 연결 성공" };
       }
-
-      const headers = buildOpenAIHeaders(account);
-      // 간단한 조직 정보 조회로 키 유효성 확인
-      await fetchJson("https://api.openai.com/v1/organization/costs?start_time=0&end_time=1&bucket_width=1d", headers);
-      return { ok: true, message: "API 키 연결 성공" };
+      if (account.sessionCookie) {
+        return { ok: true, message: "브라우저 세션 쿠키가 저장되어 있습니다." };
+      }
+      return { ok: false, message: "API 키 또는 브라우저 로그인이 필요합니다." };
     }
 
     return { ok: false, message: "지원하지 않는 provider입니다." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return { ok: false, message };
+    console.error("[testConnection] Error:", error);
+    return { ok: false, message: "연결 테스트 중 오류가 발생했습니다." };
   }
 }
 
@@ -388,17 +447,17 @@ export async function fetchUsageForAccount(account: MonitorAccount, range: Resol
     return emptyReport(account, "not_configured", "세션 쿠키가 비어 있습니다.");
   }
 
-  if (account.provider === "openai" && !account.apiKey) {
-    return emptyReport(account, "not_configured", "API 키가 비어 있습니다.");
-  }
-
   try {
     if (account.provider === "openai") {
-      return await fetchOpenAIUsage(account, range);
+      // Admin API Key가 있으면 API 방식, 없으면 oh-my-codex 메트릭 읽기
+      if (account.apiKey) {
+        return await fetchOpenAIUsage(account, range);
+      }
+      return await fetchOpenAIMetricsUsage(account);
     }
     return await fetchClaudeUsage(account, range);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return emptyReport(account, "error", message);
+    console.error("[fetchUsageForAccount] Error:", error);
+    return emptyReport(account, "error", "사용량 조회 중 오류가 발생했습니다.");
   }
 }

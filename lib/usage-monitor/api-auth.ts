@@ -15,3 +15,14 @@ export async function ensureApiAuth(): Promise<{ ok: true; user: string } | { ok
 
   return { ok: true, user: username };
 }
+
+export function verifyCsrfOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  const host = request.headers.get("host");
+  if (!origin || !host) return true; // Allow same-origin requests without Origin header (e.g. server-side)
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}

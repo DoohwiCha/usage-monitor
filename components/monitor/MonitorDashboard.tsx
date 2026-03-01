@@ -3,19 +3,15 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { AccountUsageReport, RangePreset, UsageOverviewResponse } from "@/lib/usage-monitor/types";
+import { motion, AnimatePresence } from "framer-motion";
+import type { AccountUsageReport, UsageOverviewResponse } from "@/lib/usage-monitor/types";
+import ThemeToggle from "./ThemeToggle";
 
-const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
-  { value: "day", label: "최근 24시간" },
-  { value: "week", label: "최근 7일" },
-  { value: "month", label: "최근 30일" },
-];
-
-function statusBadge(status: AccountUsageReport["status"]): string {
-  if (status === "ok") return "bg-emerald-100 text-emerald-800";
-  if (status === "disabled") return "bg-slate-200 text-slate-700";
-  if (status === "not_configured") return "bg-amber-100 text-amber-800";
-  return "bg-rose-100 text-rose-700";
+function statusDot(status: AccountUsageReport["status"]): string {
+  if (status === "ok") return "#10b981";
+  if (status === "disabled") return "#71717a";
+  if (status === "not_configured") return "#f59e0b";
+  return "#ef4444";
 }
 
 function statusLabel(status: AccountUsageReport["status"]): string {
@@ -25,59 +21,83 @@ function statusLabel(status: AccountUsageReport["status"]): string {
   return "오류";
 }
 
-function providerLabel(provider: string): string {
-  if (provider === "claude") return "Claude";
-  if (provider === "openai") return "OpenAI";
-  return provider;
+function utilizationBarGradient(pct: number): string {
+  if (pct >= 80) return "from-amber-500 to-rose-500";
+  if (pct >= 50) return "from-emerald-500 to-amber-500";
+  return "from-emerald-400 to-emerald-500";
 }
+
+function UtilizationBar({ pct, label }: { pct: number; label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-mono shrink-0 text-[var(--text-muted)] text-sm w-16">{label}</span>
+      <div className="flex-1 h-2 bg-[var(--surface-raised)] rounded-full overflow-hidden">
+        <motion.div
+          className={`h-full rounded-full bg-gradient-to-r ${utilizationBarGradient(pct)}`}
+          initial={{ width: 0 }}
+          animate={{ width: `${Math.max(pct, 1)}%` }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+        />
+      </div>
+      <span className={`font-black tabular-nums shrink-0 text-sm w-10 text-right ${pct >= 80 ? "text-rose-400" : pct >= 50 ? "text-amber-400" : "text-[var(--text-body)]"}`}>
+        {pct}%
+      </span>
+    </div>
+  );
+}
+
+const cardListVariants = { hidden: {}, visible: { transition: { staggerChildren: 0.04 } } };
+const cardVariants = {
+  hidden: { opacity: 0, y: 12 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] as const } },
+};
 
 export default function MonitorDashboard({ username }: { username: string }) {
   const router = useRouter();
-  const [range, setRange] = useState<RangePreset>("week");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<UsageOverviewResponse | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const loadUsage = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     try {
-      const response = await fetch(`/api/monitor/usage?range=${range}`, { cache: "no-store" });
+      const response = await fetch("/api/monitor/usage?range=month", { cache: "no-store" });
       const json = (await response.json()) as { ok: boolean; error?: string } & Partial<UsageOverviewResponse>;
-
       if (!response.ok || !json.ok) {
         setError(json.error || "사용량을 불러오지 못했습니다.");
         setLoading(false);
         return;
       }
-
       setData(json as UsageOverviewResponse);
-    } catch {
+      setLastRefreshed(new Date());
+    } catch (err) {
+      console.error("Failed to load usage:", err);
       setError("사용량 API 호출에 실패했습니다.");
     } finally {
       setLoading(false);
     }
-  }, [range]);
+  }, []);
 
+  useEffect(() => { void loadUsage(); }, [loadUsage]);
   useEffect(() => {
-    void loadUsage();
-  }, [loadUsage]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadUsage();
-    }, 60_000);
+    const timer = window.setInterval(() => { void loadUsage(); }, 60_000);
     return () => window.clearInterval(timer);
   }, [loadUsage]);
 
-  const sortedAccounts = useMemo(() => {
-    if (!data) return [];
-    return [...data.accounts].sort((a, b) => {
+  const { claudeAccounts, openaiAccounts } = useMemo(() => {
+    if (!data) return { claudeAccounts: [], openaiAccounts: [] };
+    const sorted = [...data.accounts].sort((a, b) => {
       if (a.status === "ok" && b.status !== "ok") return -1;
       if (a.status !== "ok" && b.status === "ok") return 1;
       return b.costUsd - a.costUsd;
     });
+    return {
+      claudeAccounts: sorted.filter((a) => a.provider === "claude"),
+      openaiAccounts: sorted.filter((a) => a.provider === "openai"),
+    };
   }, [data]);
 
   async function handleLogout() {
@@ -86,106 +106,125 @@ export default function MonitorDashboard({ username }: { username: string }) {
     router.refresh();
   }
 
+  async function handleRefresh() {
+    setRefreshing(true);
+    await loadUsage();
+    setRefreshing(false);
+  }
+
   return (
-    <main className="min-h-screen bg-slate-100">
-      <div className="max-w-6xl mx-auto px-4 py-8 space-y-5">
-        <div className="bg-white rounded-2xl p-4 border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-black text-slate-900">사용량 대시보드</h1>
-            <p className="text-sm font-medium text-slate-600">로그인 사용자: {username}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link href="/monitor/accounts" className="rounded-xl bg-slate-900 text-white px-3 py-2 font-bold text-sm">계정 관리</Link>
-            <button onClick={handleLogout} className="rounded-xl bg-slate-200 text-slate-800 px-3 py-2 font-bold text-sm">로그아웃</button>
-          </div>
-        </div>
+    <main className="min-h-screen surface-page">
+      <div className="max-w-6xl mx-auto px-4 py-5 space-y-4">
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            {RANGE_OPTIONS.map((opt) => (
+        {/* Header */}
+        <div className="glass-card rounded-2xl px-5 py-4 flex items-center justify-between gap-3">
+          <h1 className="text-3xl font-black gradient-text-brand">Usage Monitor</h1>
+          <div className="flex items-center gap-1.5">
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--surface-raised)]">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              {username}
+            </span>
+            <div className="flex items-center gap-1">
+              {lastRefreshed && (
+                <span className="text-xs text-[var(--text-dim)] tabular-nums">
+                  {lastRefreshed.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                </span>
+              )}
               <button
-                key={opt.value}
-                onClick={() => setRange(opt.value)}
-                className={`px-3 py-2 rounded-lg text-sm font-bold ${range === opt.value ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700"}`}
+                onClick={() => void handleRefresh()}
+                className="p-2 rounded-xl hover:bg-[var(--surface-raised)] transition-all"
+                title="새로고침"
               >
-                {opt.label}
+                <motion.svg
+                  animate={{ rotate: refreshing ? 360 : 0 }}
+                  transition={{ duration: 0.6, ease: "linear", repeat: refreshing ? Infinity : 0 }}
+                  width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                  className="text-[var(--text-secondary)]"
+                >
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                  <path d="M21 3v5h-5" />
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                  <path d="M8 16H3v5" />
+                </motion.svg>
               </button>
-            ))}
+            </div>
+            <ThemeToggle />
+            <Link href="/monitor/accounts" className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
+              계정 관리
+            </Link>
+            <button onClick={handleLogout} className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-muted)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
+              로그아웃
+            </button>
           </div>
-          <button onClick={() => void loadUsage()} className="px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold">
-            새로고침
-          </button>
         </div>
 
-        {error && (
-          <div className="bg-rose-50 text-rose-700 font-bold border border-rose-200 rounded-2xl p-3">
-            {error}
+        {/* Error */}
+        <AnimatePresence>
+          {error && (
+            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+              className="glass-card rounded-xl p-4 flex items-center gap-2" style={{ borderColor: "var(--error-border)", background: "var(--error-bg)" }}>
+              <p className="text-base font-semibold text-rose-400">{error}</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Loading skeleton */}
+        {loading && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div key={i} className="glass-card rounded-xl p-4 space-y-2">
+                <div className="h-4 w-3/4 rounded bg-[var(--surface-raised)] animate-pulse" />
+                <div className="h-2 w-full rounded-full bg-[var(--surface-raised)] animate-pulse" />
+                <div className="h-2 w-4/5 rounded-full bg-[var(--surface-raised)] animate-pulse" />
+              </div>
+            ))}
           </div>
         )}
 
-        {loading ? (
-          <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center font-bold text-slate-700">불러오는 중...</div>
-        ) : data && (
+        {/* Main content */}
+        {!loading && data && (
           <>
-            <div className="bg-white rounded-2xl p-4 border border-slate-200">
-              <h2 className="text-lg font-black text-slate-900 mb-3">총 사용량 현황</h2>
-              <ProviderSummary accounts={sortedAccounts} />
-            </div>
+            {/* Provider summary - compact */}
+            <ProviderSummary
+              claudeAccounts={claudeAccounts.filter(a => a.status === "ok")}
+              openaiAccounts={openaiAccounts.filter(a => a.status === "ok")}
+            />
 
-            <div className="bg-white rounded-2xl p-4 border border-slate-200">
-              <h2 className="text-lg font-black text-slate-900 mb-3">계정별 현황</h2>
-              {sortedAccounts.length === 0 && (
-                <p className="text-center text-slate-500 font-semibold py-6">등록된 계정이 없습니다.</p>
-              )}
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                {sortedAccounts.map((account) => (
-                  <div key={account.accountId} className="rounded-xl border border-slate-200 p-3 bg-slate-50">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="font-black text-slate-900">{account.name}</p>
-                        <p className="text-xs font-semibold text-slate-600">{providerLabel(account.provider)}</p>
-                      </div>
-                      <span className={`text-xs font-black px-2 py-1 rounded-full ${statusBadge(account.status)}`}>
-                        {statusLabel(account.status)}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-sm font-semibold text-slate-700 space-y-0.5">
-                      {account.provider === "claude" ? (
-                        account.claudeUsage && account.claudeUsage.windows.length > 0 ? (
-                          account.claudeUsage.windows.map((win) => {
-                            const pct = Math.min(Math.round(win.utilization), 100);
-                            return (
-                              <div key={win.label} className="flex items-center gap-2">
-                                <span className="text-xs w-20 shrink-0">{win.label}</span>
-                                <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
-                                  <div
-                                    className={`h-full rounded-full ${pct >= 80 ? "bg-rose-500" : pct >= 50 ? "bg-amber-500" : "bg-emerald-500"}`}
-                                    style={{ width: `${Math.max(pct, 1)}%` }}
-                                  />
-                                </div>
-                                <span className="text-xs font-black w-10 text-right">{pct}%</span>
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <p className="text-xs text-slate-500">사용량 없음</p>
-                        )
-                      ) : (
-                        <>
-                          <p>비용: ${account.costUsd.toFixed(2)}</p>
-                          <p>요청: {account.requests.toLocaleString()}</p>
-                          <p>토큰: {account.tokens.toLocaleString()}</p>
-                        </>
-                      )}
-                    </div>
-                    {account.error && <p className="mt-2 text-xs font-bold text-rose-600">{account.error}</p>}
-                    <Link href={`/monitor/accounts/${account.accountId}`} className="mt-3 inline-block text-sm font-black text-blue-700">
-                      상세 보기 →
-                    </Link>
-                  </div>
-                ))}
+            {/* Claude accounts group */}
+            {claudeAccounts.length > 0 && (
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2 px-1">
+                  <div className="w-3 h-3 rounded-full bg-[var(--brand-claude)]" />
+                  <h2 className="text-xl font-black" style={{ color: "var(--brand-claude)" }}>Claude</h2>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{claudeAccounts.length}개</span>
+                  <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }} />
+                </div>
+                <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
+                  {claudeAccounts.map((a) => <AccountCard key={a.accountId} account={a} />)}
+                </motion.div>
               </div>
-            </div>
+            )}
+
+            {/* OpenAI accounts group */}
+            {openaiAccounts.length > 0 && (
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2 px-1">
+                  <div className="w-3 h-3 rounded-full bg-[var(--brand-openai)]" />
+                  <h2 className="text-xl font-black" style={{ color: "var(--brand-openai)" }}>OpenAI</h2>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{openaiAccounts.length}개</span>
+                  <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }} />
+                </div>
+                <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
+                  {openaiAccounts.map((a) => <AccountCard key={a.accountId} account={a} />)}
+                </motion.div>
+              </div>
+            )}
+
+            {claudeAccounts.length === 0 && openaiAccounts.length === 0 && (
+              <div className="glass-card rounded-xl p-8 text-center">
+                <p className="text-[var(--text-muted)] font-semibold text-lg">등록된 계정이 없습니다.</p>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -193,71 +232,116 @@ export default function MonitorDashboard({ username }: { username: string }) {
   );
 }
 
-function ProviderSummary({ accounts }: { accounts: AccountUsageReport[] }) {
-  const claudeAccounts = accounts.filter((a) => a.provider === "claude" && a.status === "ok");
-  const openaiAccounts = accounts.filter((a) => a.provider === "openai" && a.status === "ok");
-
-  // Claude: 윈도우별 평균 utilization
-  const claudeWindowMap = new Map<string, number[]>();
-  for (const acc of claudeAccounts) {
-    for (const win of acc.claudeUsage?.windows || []) {
-      const pct = Math.min(Math.round(win.utilization), 100);
-      const list = claudeWindowMap.get(win.label) || [];
-      list.push(pct);
-      claudeWindowMap.set(win.label, list);
-    }
-  }
-
-  const openaiTotalCost = openaiAccounts.reduce((s, a) => s + a.costUsd, 0);
-  const openaiTotalTokens = openaiAccounts.reduce((s, a) => s + a.tokens, 0);
-  const openaiTotalRequests = openaiAccounts.reduce((s, a) => s + a.requests, 0);
-
-  if (claudeAccounts.length === 0 && openaiAccounts.length === 0) {
-    return <p className="text-sm text-slate-500 font-semibold py-3">정상 계정이 없습니다.</p>;
-  }
+function AccountCard({ account }: { account: AccountUsageReport }) {
+  const isClaude = account.provider === "claude";
+  const brand = isClaude ? "var(--brand-claude)" : "var(--brand-openai)";
 
   return (
-    <div className="space-y-4">
-      {claudeAccounts.length > 0 && (
-        <div>
-          <p className="text-sm font-black text-violet-700 mb-2">Claude ({claudeAccounts.length}개 계정)</p>
-          <div className="space-y-2">
-            {Array.from(claudeWindowMap.entries()).map(([label, pcts]) => {
-              const avg = Math.round(pcts.reduce((s, v) => s + v, 0) / pcts.length);
-              return (
-                <div key={label} className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-600 w-24 shrink-0">{label}</span>
-                  <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full ${avg >= 80 ? "bg-rose-500" : avg >= 50 ? "bg-amber-500" : "bg-emerald-500"}`}
-                      style={{ width: `${Math.max(avg, 1)}%` }}
-                    />
-                  </div>
-                  <span className="text-sm font-black w-12 text-right">{avg}%</span>
-                </div>
-              );
-            })}
+    <motion.div variants={cardVariants}
+      className="relative glass-card rounded-xl p-4 overflow-hidden"
+      style={{ borderLeftWidth: 2, borderLeftColor: brand }}
+    >
+      <div className="flex items-center justify-between gap-2 mb-2.5">
+        <div className="min-w-0 flex items-center gap-2">
+          <p className="font-bold text-lg text-[var(--text-heading)] truncate">{account.name}</p>
+          <span className="shrink-0 text-xs font-bold px-2 py-0.5 rounded-full" style={{ backgroundColor: `color-mix(in srgb, ${brand} 12%, transparent)`, color: brand }}>
+            {isClaude ? "Claude" : "OpenAI"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusDot(account.status) }} />
+          <span className="text-sm font-semibold text-[var(--text-muted)]">{statusLabel(account.status)}</span>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        {account.usageInfo && account.usageInfo.windows.length > 0 ? (
+          account.usageInfo.windows.map((win) => {
+            const pct = Math.min(Math.round(win.utilization), 100);
+            return <UtilizationBar key={win.label} pct={pct} label={win.label} />;
+          })
+        ) : account.provider === "openai" && (account.costUsd > 0 || account.requests > 0) ? (
+          <div className="flex gap-3 text-sm">
+            <span className="text-[var(--text-muted)]">비용 <strong className="text-[var(--text-body)]">${account.costUsd.toFixed(2)}</strong></span>
+            <span className="text-[var(--text-muted)]">요청 <strong className="text-[var(--text-body)]">{account.requests.toLocaleString()}</strong></span>
+            <span className="text-[var(--text-muted)]">토큰 <strong className="text-[var(--text-body)]">{account.tokens.toLocaleString()}</strong></span>
           </div>
+        ) : (
+          <p className="text-sm text-[var(--text-dim)]">사용량 없음</p>
+        )}
+      </div>
+
+      {account.error && <p className="mt-1.5 text-sm font-semibold text-rose-400 truncate">{account.error}</p>}
+
+      <Link href={`/monitor/accounts/${account.accountId}`}
+        className="mt-2.5 inline-flex items-center gap-1 text-base font-semibold transition-colors"
+        style={{ color: brand }}>
+        상세 →
+      </Link>
+    </motion.div>
+  );
+}
+
+function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: AccountUsageReport[]; openaiAccounts: AccountUsageReport[] }) {
+  function buildWindowMap(accs: AccountUsageReport[]) {
+    const map = new Map<string, number[]>();
+    for (const acc of accs) {
+      for (const win of acc.usageInfo?.windows || []) {
+        const pct = Math.min(Math.round(win.utilization), 100);
+        const list = map.get(win.label) || [];
+        list.push(pct);
+        map.set(win.label, list);
+      }
+    }
+    return map;
+  }
+
+  const claudeWindowMap = buildWindowMap(claudeAccounts);
+  const openaiWindowMap = buildWindowMap(openaiAccounts);
+  const openaiTotalCost = openaiAccounts.reduce((s, a) => s + a.costUsd, 0);
+  const openaiTotalRequests = openaiAccounts.reduce((s, a) => s + a.requests, 0);
+
+  if (claudeAccounts.length === 0 && openaiAccounts.length === 0) return null;
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {claudeAccounts.length > 0 && (
+        <div className="glass-card rounded-xl p-4 overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }}>
+          <div className="flex items-center gap-2 mb-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-claude)]" />
+            <p className="text-base font-black" style={{ color: "var(--brand-claude)" }}>Claude 평균</p>
+            <span className="text-sm text-[var(--text-muted)]">{claudeAccounts.length}개</span>
+          </div>
+          {claudeWindowMap.size > 0 ? (
+            <div className="space-y-1.5">
+              {Array.from(claudeWindowMap.entries()).map(([label, pcts]) => {
+                const avg = Math.round(pcts.reduce((s, v) => s + v, 0) / pcts.length);
+                return <UtilizationBar key={label} pct={avg} label={label} />;
+              })}
+            </div>
+          ) : <p className="text-sm text-[var(--text-dim)]">데이터 없음</p>}
         </div>
       )}
-
       {openaiAccounts.length > 0 && (
-        <div>
-          <p className="text-sm font-black text-emerald-700 mb-2">OpenAI ({openaiAccounts.length}개 계정)</p>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="rounded-lg bg-slate-50 p-2">
-              <p className="text-[10px] font-bold text-slate-500">비용</p>
-              <p className="text-sm font-black text-slate-900">${openaiTotalCost.toFixed(2)}</p>
-            </div>
-            <div className="rounded-lg bg-slate-50 p-2">
-              <p className="text-[10px] font-bold text-slate-500">요청</p>
-              <p className="text-sm font-black text-slate-900">{openaiTotalRequests.toLocaleString()}</p>
-            </div>
-            <div className="rounded-lg bg-slate-50 p-2">
-              <p className="text-[10px] font-bold text-slate-500">토큰</p>
-              <p className="text-sm font-black text-slate-900">{openaiTotalTokens.toLocaleString()}</p>
-            </div>
+        <div className="glass-card rounded-xl p-4 overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }}>
+          <div className="flex items-center gap-2 mb-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-openai)]" />
+            <p className="text-base font-black" style={{ color: "var(--brand-openai)" }}>OpenAI 합계</p>
+            <span className="text-sm text-[var(--text-muted)]">{openaiAccounts.length}개</span>
           </div>
+          {openaiWindowMap.size > 0 ? (
+            <div className="space-y-1.5">
+              {Array.from(openaiWindowMap.entries()).map(([label, pcts]) => {
+                const avg = Math.round(pcts.reduce((s, v) => s + v, 0) / pcts.length);
+                return <UtilizationBar key={label} pct={avg} label={label} />;
+              })}
+            </div>
+          ) : (openaiTotalCost > 0 || openaiTotalRequests > 0) ? (
+            <div className="flex gap-4 text-sm">
+              <span className="text-[var(--text-muted)]">비용 <strong className="text-[var(--text-body)]">${openaiTotalCost.toFixed(2)}</strong></span>
+              <span className="text-[var(--text-muted)]">요청 <strong className="text-[var(--text-body)]">{openaiTotalRequests.toLocaleString()}</strong></span>
+            </div>
+          ) : <p className="text-sm text-[var(--text-dim)]">데이터 없음</p>}
         </div>
       )}
     </div>
