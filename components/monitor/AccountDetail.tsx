@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AccountUsageReport, UtilizationWindow, ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
+import { useTranslation } from "@/lib/i18n/context";
+import LanguageSelector from "./LanguageSelector";
 
 function brandVar(p: string) { return p === "claude" ? "var(--brand-claude)" : "var(--brand-openai)"; }
 function brandLightVar(p: string) { return p === "claude" ? "var(--brand-claude-light)" : "var(--brand-openai-light)"; }
@@ -24,6 +26,7 @@ function ToggleSwitch({ checked, onChange, color }: { checked: boolean; onChange
 }
 
 export default function AccountDetail({ id }: { id: string }) {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<PublicMonitorAccount | null>(null);
@@ -44,18 +47,18 @@ export default function AccountDetail({ id }: { id: string }) {
       ]);
       const aJson = (await aRes.json()) as { ok: boolean; account?: PublicMonitorAccount; error?: string };
       const uJson = (await uRes.json()) as { ok: boolean; accounts?: AccountUsageReport[]; error?: string };
-      if (!aRes.ok || !aJson.ok || !aJson.account) { setError(aJson.error || "계정 정보 불러오기 실패"); setLoading(false); return; }
-      if (!uRes.ok || !uJson.ok || !uJson.accounts?.[0]) { setError(uJson.error || "사용량 불러오기 실패"); setLoading(false); return; }
+      if (!aRes.ok || !aJson.ok || !aJson.account) { setError(aJson.error || t("detail.loadAccountError")); setLoading(false); return; }
+      if (!uRes.ok || !uJson.ok || !uJson.accounts?.[0]) { setError(uJson.error || t("detail.loadUsageError")); setLoading(false); return; }
       setAccount(aJson.account);
       setForm({ name: aJson.account.name, provider: aJson.account.provider, enabled: aJson.account.enabled, sessionCookie: "", apiKey: "", organizationId: aJson.account.organizationId || "" });
       setReport(uJson.accounts[0]);
-    } catch { setError("API 호출 실패"); } finally { setLoading(false); }
-  }, [id]);
+    } catch { setError(t("detail.apiCallError")); } finally { setLoading(false); }
+  }, [id, t]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { const t = window.setInterval(() => { void load(); }, 60_000); return () => window.clearInterval(t); }, [load]);
+  useEffect(() => { const timer = window.setInterval(() => { void load(); }, 60_000); return () => window.clearInterval(timer); }, [load]);
 
-  const title = useMemo(() => account?.name || "계정 상세", [account]);
+  const title = useMemo(() => account?.name || "Account", [account]);
   const isClaude = form.provider === "claude";
   const brand = brandVar(form.provider);
 
@@ -67,9 +70,9 @@ export default function AccountDetail({ id }: { id: string }) {
       if (form.apiKey.trim()) payload.apiKey = form.apiKey.trim();
       const res = await fetch(`/api/monitor/accounts/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!res.ok || !json.ok) { setError(json.error || "저장 실패"); setSaving(false); return; }
-      setSaveMessage("저장 완료"); setForm((p) => ({ ...p, sessionCookie: "", apiKey: "" })); await load();
-    } catch { setError("저장 API 실패"); } finally { setSaving(false); }
+      if (!res.ok || !json.ok) { setError(json.error || t("detail.saveError")); setSaving(false); return; }
+      setSaveMessage(t("detail.saved")); setForm((p) => ({ ...p, sessionCookie: "", apiKey: "" })); await load();
+    } catch { setError(t("detail.saveApiError")); } finally { setSaving(false); }
   }
 
   async function handleProviderLogin(provider: "claude" | "openai") {
@@ -78,9 +81,9 @@ export default function AccountDetail({ id }: { id: string }) {
     try {
       const res = await fetch(`/api/monitor/accounts/${id}/${provider}-login`, { method: "POST" });
       const json = (await res.json()) as { ok: boolean; message?: string; error?: string };
-      if (!res.ok || !json.ok) setError(json.error || `${provider} 로그인 실패`);
-      else { setSaveMessage(json.message || "로그인 성공"); void load(); }
-    } catch (err) { console.error(err); setError(`${provider} 로그인 오류`); } finally { setL(false); }
+      if (!res.ok || !json.ok) setError(json.error || t("detail.loginFailed"));
+      else { setSaveMessage(json.message || t("detail.loginSuccess")); void load(); }
+    } catch (err) { console.error(err); setError(t("detail.loginErrorGeneric")); } finally { setL(false); }
   }
 
   async function handleTestConnection() {
@@ -88,9 +91,9 @@ export default function AccountDetail({ id }: { id: string }) {
     try {
       const res = await fetch(`/api/monitor/accounts/${id}/connect`, { method: "POST" });
       const json = (await res.json()) as { ok: boolean; account?: PublicMonitorAccount; error?: string; message?: string };
-      if (!res.ok || !json.ok) { setError(json.error || "연결 테스트 실패"); if (json.account) setAccount(json.account); return; }
-      setSaveMessage(json.message || "연결 성공"); if (json.account) setAccount(json.account); await load();
-    } catch { setError("연결 테스트 실패"); } finally { setConnecting(false); }
+      if (!res.ok || !json.ok) { setError(json.error || t("detail.connectError")); if (json.account) setAccount(json.account); return; }
+      setSaveMessage(json.message || t("detail.connectSuccess")); if (json.account) setAccount(json.account); await load();
+    } catch { setError(t("detail.connectError")); } finally { setConnecting(false); }
   }
 
   return (
@@ -101,7 +104,7 @@ export default function AccountDetail({ id }: { id: string }) {
         <div className="glass-card rounded-2xl px-5 py-4 flex items-center justify-between gap-3">
           <div>
             <Link href="/monitor/accounts" className="group inline-flex items-center gap-1 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text-heading)] transition-colors mb-1">
-              <span className="group-hover:-translate-x-0.5 transition-transform">←</span> 계정 목록
+              <span className="group-hover:-translate-x-0.5 transition-transform">←</span> {t("detail.accountList")}
             </Link>
             <div className="flex items-center gap-2">
               <h1 className="text-3xl font-black text-[var(--text-heading)]">{title}</h1>
@@ -111,8 +114,9 @@ export default function AccountDetail({ id }: { id: string }) {
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            <LanguageSelector />
             <ThemeToggle />
-            <Link href="/monitor" className="px-3 py-2 rounded-xl text-base font-bold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">대시보드</Link>
+            <Link href="/monitor" className="px-3 py-2 rounded-xl text-base font-bold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">{t("dashboard")}</Link>
           </div>
         </div>
 
@@ -131,20 +135,20 @@ export default function AccountDetail({ id }: { id: string }) {
         {/* Settings - compact */}
         <div className="glass-card rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-black text-[var(--text-heading)]">계정 설정</h2>
+            <h2 className="text-lg font-black text-[var(--text-heading)]">{t("detail.accountSettings")}</h2>
             <div className="flex items-center gap-2">
-              <span className="text-base font-bold text-[var(--text-muted)]">활성화</span>
+              <span className="text-base font-bold text-[var(--text-muted)]">{t("enabled")}</span>
               <ToggleSwitch checked={form.enabled} onChange={(v) => setForm((p) => ({ ...p, enabled: v }))} color={brand} />
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <div>
-              <label className="block text-sm font-bold text-[var(--text-muted)] mb-1">이름</label>
+              <label className="block text-sm font-bold text-[var(--text-muted)] mb-1">{t("detail.name")}</label>
               <input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} className="surface-input rounded-xl px-3 py-2.5 text-base border w-full" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-[var(--text-muted)] mb-1">Provider</label>
+              <label className="block text-sm font-bold text-[var(--text-muted)] mb-1">{t("detail.provider")}</label>
               <div className="flex gap-1 p-0.5 bg-[var(--surface-input)] rounded-lg border border-[var(--border-input)]">
                 {(["claude", "openai"] as const).map((p) => (
                   <button key={p} type="button" onClick={() => setForm((f) => ({ ...f, provider: p }))}
@@ -160,23 +164,23 @@ export default function AccountDetail({ id }: { id: string }) {
             <div className="md:col-span-2">
               <div className="rounded-xl p-4 space-y-2.5" style={{ backgroundColor: `color-mix(in srgb, ${brand} 6%, transparent)`, border: `1px solid color-mix(in srgb, ${brand} 20%, transparent)` }}>
                 <p className="text-base font-black" style={{ color: brand }}>
-                  {isClaude ? "브라우저 로그인 (권장)" : "브라우저 로그인 (정액제 권장)"}
+                  {isClaude ? t("detail.browserLoginClaude") : t("detail.browserLoginOpenai")}
                 </p>
                 <p className="text-sm text-[var(--text-muted)]">
-                  {isClaude ? "claude.ai에 로그인하면 쿠키가 자동 저장됩니다." : "ChatGPT에 로그인하면 쿠키가 자동 저장됩니다."}
+                  {isClaude ? t("detail.claudeLoginDesc") : t("detail.openaiLoginDesc")}
                 </p>
                 <button onClick={() => void handleProviderLogin(isClaude ? "claude" : "openai")}
                   disabled={isClaude ? claudeLogging : openaiLogging}
                   className="inline-flex items-center gap-2 rounded-xl text-white px-4 py-2.5 font-bold text-base disabled:opacity-50 transition-all"
                   style={{ background: `linear-gradient(to right, ${brand}, ${brandLightVar(form.provider)})` }}>
                   {(isClaude ? claudeLogging : openaiLogging) && <Spinner />}
-                  {(isClaude ? claudeLogging : openaiLogging) ? "로그인 중... (최대 3분)" : `${isClaude ? "Claude" : "OpenAI"} 로그인`}
+                  {(isClaude ? claudeLogging : openaiLogging) ? t("detail.loggingInMax") : (isClaude ? t("detail.claudeLogin") : t("detail.openaiLogin"))}
                 </button>
               </div>
 
               <details className="mt-2 group">
                 <summary className="text-sm font-bold text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-secondary)] transition-colors">
-                  {isClaude ? "수동 쿠키 입력" : "Admin API Key (종량제)"}
+                  {isClaude ? t("detail.manualCookie") : t("detail.adminApiKey")}
                 </summary>
                 <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
                   {isClaude ? (
@@ -213,38 +217,38 @@ export default function AccountDetail({ id }: { id: string }) {
             <button onClick={() => void saveAccount()} disabled={saving}
               className="inline-flex items-center gap-2 rounded-xl text-white px-4 py-2.5 font-bold text-base disabled:opacity-50"
               style={{ background: `linear-gradient(to right, ${brand}, ${brandLightVar(form.provider)})` }}>
-              {saving && <Spinner />}{saving ? "저장 중..." : "설정 저장"}
+              {saving && <Spinner />}{saving ? t("detail.saving") : t("detail.saveSettings")}
             </button>
             <button onClick={() => void handleTestConnection()} disabled={connecting}
               className="inline-flex items-center gap-2 rounded-xl border border-[var(--border-card)] px-4 py-2.5 font-bold text-base text-[var(--text-body)] hover:border-[var(--border-hover)] disabled:opacity-50 transition-all">
-              {connecting && <Spinner />}{connecting ? "테스트 중..." : "연결 테스트"}
+              {connecting && <Spinner />}{connecting ? t("detail.testing") : t("detail.testConnection")}
             </button>
           </div>
         </div>
 
         {/* Usage */}
         {loading ? (
-          <div className="glass-card rounded-xl p-6 text-center text-[var(--text-muted)] font-bold text-lg">불러오는 중...</div>
+          <div className="glass-card rounded-xl p-6 text-center text-[var(--text-muted)] font-bold text-lg">{t("loading")}</div>
         ) : report && (
           <div className="space-y-3">
             {/* Utilization */}
             {report.usageInfo && report.usageInfo.windows.length > 0 ? (
               <div className="glass-card rounded-xl p-5 space-y-3">
-                <h2 className="text-lg font-black text-[var(--text-heading)]">사용량 (Rate Limit)</h2>
+                <h2 className="text-lg font-black text-[var(--text-heading)]">{t("detail.usageRateLimit")}</h2>
                 {report.usageInfo.windows.map((win) => <UtilBar key={win.label} window={win} />)}
               </div>
             ) : (
               <div className="glass-card rounded-xl p-5">
-                <h2 className="text-lg font-black text-[var(--text-heading)] mb-1">사용량</h2>
+                <h2 className="text-lg font-black text-[var(--text-heading)] mb-1">{t("detail.usage")}</h2>
                 <p className="text-base text-[var(--text-muted)]">
-                  {report.status === "disabled" ? "비활성화됨" : report.status === "not_configured" ? "설정 필요" : "데이터 없음"}
+                  {report.status === "disabled" ? t("detail.disabledStatus") : report.status === "not_configured" ? t("detail.needsSetup") : t("noData")}
                 </p>
               </div>
             )}
 
             {report.usageInfo?.extraUsage?.enabled && (
               <div className="glass-card rounded-xl p-5">
-                <h2 className="text-lg font-black text-[var(--text-heading)] mb-1">추가 사용량</h2>
+                <h2 className="text-lg font-black text-[var(--text-heading)] mb-1">{t("detail.extraUsage")}</h2>
                 <p className="text-base text-[var(--text-body)]">
                   ${report.usageInfo.extraUsage.usedCredits.toFixed(2)}
                   {report.usageInfo.extraUsage.monthlyLimit != null && <span className="text-[var(--text-muted)]"> / ${report.usageInfo.extraUsage.monthlyLimit.toFixed(2)}</span>}
@@ -254,11 +258,11 @@ export default function AccountDetail({ id }: { id: string }) {
 
             {report.usageInfo?.billing && (
               <div className="glass-card rounded-xl p-5">
-                <h2 className="text-lg font-black text-[var(--text-heading)] mb-2">구독 정보</h2>
+                <h2 className="text-lg font-black text-[var(--text-heading)] mb-2">{t("detail.subscription")}</h2>
                 <div className="grid grid-cols-3 gap-3 text-base">
-                  <div><p className="text-sm text-[var(--text-muted)]">상태</p><p className="font-black text-[var(--text-heading)] capitalize">{report.usageInfo.billing.status}</p></div>
-                  {report.usageInfo.billing.nextChargeDate && <div><p className="text-sm text-[var(--text-muted)]">결제일</p><p className="font-black text-[var(--text-heading)]">{report.usageInfo.billing.nextChargeDate}</p></div>}
-                  {report.usageInfo.billing.interval && <div><p className="text-sm text-[var(--text-muted)]">주기</p><p className="font-black text-[var(--text-heading)] capitalize">{report.usageInfo.billing.interval}</p></div>}
+                  <div><p className="text-sm text-[var(--text-muted)]">{t("detail.status")}</p><p className="font-black text-[var(--text-heading)] capitalize">{report.usageInfo.billing.status}</p></div>
+                  {report.usageInfo.billing.nextChargeDate && <div><p className="text-sm text-[var(--text-muted)]">{t("detail.chargeDate")}</p><p className="font-black text-[var(--text-heading)]">{report.usageInfo.billing.nextChargeDate}</p></div>}
+                  {report.usageInfo.billing.interval && <div><p className="text-sm text-[var(--text-muted)]">{t("detail.interval")}</p><p className="font-black text-[var(--text-heading)] capitalize">{report.usageInfo.billing.interval}</p></div>}
                 </div>
               </div>
             )}
@@ -266,7 +270,7 @@ export default function AccountDetail({ id }: { id: string }) {
             {report.provider === "openai" && (report.costUsd > 0 || report.requests > 0) && (
               <>
                 <div className="grid grid-cols-3 gap-2">
-                  {[["비용", `$${report.costUsd.toFixed(2)}`], ["요청", report.requests.toLocaleString()], ["토큰", report.tokens.toLocaleString()]].map(([l, v]) => (
+                  {([[t("cost"), `$${report.costUsd.toFixed(2)}`], [t("requests"), report.requests.toLocaleString()], [t("tokens"), report.tokens.toLocaleString()]] as [string, string][]).map(([l, v]) => (
                     <div key={l} className="glass-card rounded-xl p-4">
                       <p className="text-sm text-[var(--text-muted)]">{l}</p>
                       <p className="text-xl font-black text-[var(--text-heading)]">{v}</p>
@@ -275,9 +279,9 @@ export default function AccountDetail({ id }: { id: string }) {
                 </div>
                 {report.points.length > 0 && (
                   <div className="glass-card rounded-xl p-5">
-                    <h2 className="text-lg font-black text-[var(--text-heading)] mb-2">일자별</h2>
+                    <h2 className="text-lg font-black text-[var(--text-heading)] mb-2">{t("detail.daily")}</h2>
                     <table className="w-full text-base">
-                      <thead><tr className="text-sm text-[var(--text-muted)]"><th className="py-1 text-left">날짜</th><th className="py-1 text-right">비용</th><th className="py-1 text-right">요청</th><th className="py-1 text-right">토큰</th></tr></thead>
+                      <thead><tr className="text-sm text-[var(--text-muted)]"><th className="py-1 text-left">{t("detail.date")}</th><th className="py-1 text-right">{t("cost")}</th><th className="py-1 text-right">{t("requests")}</th><th className="py-1 text-right">{t("tokens")}</th></tr></thead>
                       <tbody>
                         {report.points.map((p) => (
                           <tr key={p.date} className="border-t border-[var(--border-card)]">
@@ -303,6 +307,7 @@ export default function AccountDetail({ id }: { id: string }) {
 }
 
 function UtilBar({ window: win }: { window: UtilizationWindow }) {
+  const { t } = useTranslation();
   const pct = Math.min(Math.round(win.utilization), 100);
   const grad = pct >= 80 ? "from-rose-500 to-rose-400" : pct >= 50 ? "from-amber-500 to-amber-400" : "from-emerald-500 to-emerald-400";
   return (
@@ -314,7 +319,7 @@ function UtilBar({ window: win }: { window: UtilizationWindow }) {
       <div className="w-full h-2.5 bg-[var(--surface-raised)] rounded-full overflow-hidden">
         <motion.div initial={{ width: 0 }} animate={{ width: `${Math.max(pct, 1)}%` }} transition={{ duration: 0.6, ease: "easeOut" }} className={`h-full rounded-full bg-gradient-to-r ${grad}`} />
       </div>
-      {win.resetsAt && <p className="text-sm text-[var(--text-dim)] mt-0.5">리셋: {new Date(win.resetsAt).toLocaleString("ko-KR")}</p>}
+      {win.resetsAt && <p className="text-sm text-[var(--text-dim)] mt-0.5">{t("detail.reset")} {new Date(win.resetsAt).toLocaleString()}</p>}
     </div>
   );
 }

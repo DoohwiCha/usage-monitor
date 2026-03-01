@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
+import { useTranslation } from "@/lib/i18n/context";
+import LanguageSelector from "./LanguageSelector";
 
 interface AccountsResponse {
   ok: boolean;
@@ -28,6 +30,7 @@ function ToggleSwitch({ checked, onChange, color }: { checked: boolean; onChange
 }
 
 export default function AccountsManager() {
+  const { t } = useTranslation();
   const [accounts, setAccounts] = useState<PublicMonitorAccount[]>([]);
   const [maxAccounts, setMaxAccounts] = useState(12);
   const [loading, setLoading] = useState(true);
@@ -39,10 +42,10 @@ export default function AccountsManager() {
     try {
       const res = await fetch("/api/monitor/accounts", { cache: "no-store" });
       const json = (await res.json()) as AccountsResponse;
-      if (!res.ok || !json.ok) { setError(json.error || "불러오기 실패"); setLoading(false); return; }
+      if (!res.ok || !json.ok) { setError(json.error || t("accounts.loadError")); setLoading(false); return; }
       setAccounts(json.accounts); setMaxAccounts(json.maxAccounts);
-    } catch (err) { console.error(err); setError("API 호출 실패"); } finally { setLoading(false); }
-  }, []);
+    } catch (err) { console.error(err); setError(t("accounts.apiCallError")); } finally { setLoading(false); }
+  }, [t]);
 
   useEffect(() => { void loadAccounts(); }, [loadAccounts]);
 
@@ -53,7 +56,7 @@ export default function AccountsManager() {
     else { payload.apiKey = newAccount.apiKey; payload.organizationId = newAccount.organizationId; }
     const res = await fetch("/api/monitor/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const json = (await res.json()) as { ok: boolean; accounts?: PublicMonitorAccount[]; error?: string };
-    if (!res.ok || !json.ok) { setError(json.error || "추가 실패"); return; }
+    if (!res.ok || !json.ok) { setError(json.error || t("accounts.addError")); return; }
     setNewAccount({ name: "", provider: "claude", enabled: false, sessionCookie: "", apiKey: "", organizationId: "" });
     setAccounts(json.accounts || []);
   }
@@ -62,7 +65,7 @@ export default function AccountsManager() {
     setError(null);
     const res = await fetch(`/api/monitor/accounts/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const json = (await res.json()) as { ok: boolean; accounts?: PublicMonitorAccount[]; error?: string };
-    if (!res.ok || !json.ok) { setError(json.error || "수정 실패"); return; }
+    if (!res.ok || !json.ok) { setError(json.error || t("accounts.patchError")); return; }
     setAccounts(json.accounts || []);
   }
 
@@ -70,7 +73,7 @@ export default function AccountsManager() {
     setError(null);
     const res = await fetch(`/api/monitor/accounts/${id}`, { method: "DELETE" });
     const json = (await res.json()) as { ok: boolean; accounts?: PublicMonitorAccount[]; error?: string };
-    if (!res.ok || !json.ok) { setError(json.error || "삭제 실패"); return; }
+    if (!res.ok || !json.ok) { setError(json.error || t("accounts.deleteError")); return; }
     setAccounts(json.accounts || []);
   }
 
@@ -82,12 +85,14 @@ export default function AccountsManager() {
     setError(null);
     const res = await fetch("/api/monitor/accounts/reorder", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderedIds: ids }) });
     const json = (await res.json()) as { ok: boolean; accounts?: PublicMonitorAccount[]; error?: string };
-    if (!res.ok || !json.ok) { setError(json.error || "순서 변경 실패"); return; }
+    if (!res.ok || !json.ok) { setError(json.error || t("accounts.reorderError")); return; }
     setAccounts(json.accounts || []);
   }
 
   const claudeAccounts = accounts.filter((a) => a.provider === "claude");
   const openaiAccounts = accounts.filter((a) => a.provider === "openai");
+
+  const countUnit = t("countUnit");
 
   return (
     <main className="min-h-screen surface-page">
@@ -96,15 +101,16 @@ export default function AccountsManager() {
         {/* Header */}
         <div className="glass-card rounded-2xl px-5 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-black text-[var(--text-heading)]">계정 관리</h1>
+            <h1 className="text-3xl font-black text-[var(--text-heading)]">{t("accountManage")}</h1>
             <span className="text-base font-bold text-[var(--text-muted)] bg-[var(--surface-raised)] px-2.5 py-1 rounded-full">
               {accounts.length}/{maxAccounts}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
+            <LanguageSelector />
             <ThemeToggle />
             <Link href="/monitor" className="px-3 py-2 rounded-xl text-base font-bold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
-              대시보드
+              {t("dashboard")}
             </Link>
           </div>
         </div>
@@ -123,7 +129,7 @@ export default function AccountsManager() {
         {/* Add account form - compact */}
         <form onSubmit={addAccount} className="glass-card rounded-2xl p-5 space-y-3.5">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-black text-[var(--text-heading)]">계정 추가</h2>
+            <h2 className="text-lg font-black text-[var(--text-heading)]">{t("accounts.addAccount")}</h2>
             <div className="flex gap-1 p-0.5 bg-[var(--surface-input)] rounded-lg border border-[var(--border-input)]">
               {(["claude", "openai"] as const).map((p) => (
                 <button key={p} type="button" onClick={() => setNewAccount((prev) => ({ ...prev, provider: p }))}
@@ -136,11 +142,11 @@ export default function AccountsManager() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <input value={newAccount.name} onChange={(e) => setNewAccount((p) => ({ ...p, name: e.target.value }))} placeholder="계정 이름"
+            <input value={newAccount.name} onChange={(e) => setNewAccount((p) => ({ ...p, name: e.target.value }))} placeholder={t("accounts.accountName")}
               className="surface-input rounded-xl px-3 py-2.5 text-base border" />
             <div className="flex items-center gap-2 surface-input rounded-xl px-3 py-2.5 border">
               <ToggleSwitch checked={newAccount.enabled} onChange={(v) => setNewAccount((p) => ({ ...p, enabled: v }))} color={brandVar(newAccount.provider)} />
-              <span className="text-base font-bold text-[var(--text-secondary)]">활성화</span>
+              <span className="text-base font-bold text-[var(--text-secondary)]">{t("enabled")}</span>
             </div>
             {newAccount.provider === "openai" && (
               <input value={newAccount.apiKey} onChange={(e) => setNewAccount((p) => ({ ...p, apiKey: e.target.value }))} placeholder="Admin API Key (sk-admin-...)"
@@ -148,21 +154,21 @@ export default function AccountsManager() {
             )}
           </div>
           {newAccount.provider === "claude" && (
-            <p className="text-sm text-[var(--text-muted)]">추가 후 상세 페이지에서 "Claude 로그인" 버튼으로 쿠키를 자동 설정합니다.</p>
+            <p className="text-sm text-[var(--text-muted)]">{t("accounts.cookieNote")}</p>
           )}
           <button type="submit" disabled={accounts.length >= maxAccounts}
             className="w-full rounded-xl text-white font-black py-2.5 text-base disabled:opacity-30"
             style={{ background: `linear-gradient(to right, ${brandVar(newAccount.provider)}, ${newAccount.provider === "claude" ? "var(--brand-claude-light)" : "var(--brand-openai-light)"})` }}>
-            계정 추가
+            {t("accounts.addAccount")}
           </button>
         </form>
 
         {/* Account list - grouped */}
         {loading ? (
-          <div className="glass-card rounded-xl p-8 text-center text-[var(--text-muted)] font-bold text-lg">불러오는 중...</div>
+          <div className="glass-card rounded-xl p-8 text-center text-[var(--text-muted)] font-bold text-lg">{t("loading")}</div>
         ) : accounts.length === 0 ? (
           <div className="glass-card rounded-xl p-8 text-center">
-            <p className="text-[var(--text-muted)] font-semibold text-lg">등록된 계정이 없습니다.</p>
+            <p className="text-[var(--text-muted)] font-semibold text-lg">{t("noAccounts")}</p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -171,7 +177,7 @@ export default function AccountsManager() {
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-claude)]" />
                   <span className="text-lg font-black" style={{ color: "var(--brand-claude)" }}>Claude</span>
-                  <span className="text-base text-[var(--text-muted)]">{claudeAccounts.length}개</span>
+                  <span className="text-base text-[var(--text-muted)]">{claudeAccounts.length}{countUnit ? countUnit : ""}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }} />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -187,7 +193,7 @@ export default function AccountsManager() {
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-openai)]" />
                   <span className="text-lg font-black" style={{ color: "var(--brand-openai)" }}>OpenAI</span>
-                  <span className="text-base text-[var(--text-muted)]">{openaiAccounts.length}개</span>
+                  <span className="text-base text-[var(--text-muted)]">{openaiAccounts.length}{countUnit ? countUnit : ""}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }} />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -211,14 +217,18 @@ function AccCard({ account, idx, total, onMove, onPatch, onDelete }: {
   onPatch: (id: string, p: Record<string, unknown>) => void;
   onDelete: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   const brand = brandVar(account.provider);
+  const credentialLabel = account.provider === "claude"
+    ? `${t("accounts.cookie")}: ${account.sessionCookieMasked || t("accounts.none")}`
+    : `${t("accounts.key")}: ${account.apiKeyMasked || t("accounts.none")}`;
   return (
     <div className="glass-card rounded-xl p-4">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="font-bold text-lg text-[var(--text-heading)] truncate">{account.name}</p>
           <p className="text-sm text-[var(--text-muted)] mt-0.5 truncate">
-            {account.provider === "claude" ? `쿠키: ${account.sessionCookieMasked || "(없음)"}` : `키: ${account.apiKeyMasked || "(없음)"}`}
+            {credentialLabel}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -230,8 +240,8 @@ function AccCard({ account, idx, total, onMove, onPatch, onDelete }: {
         </div>
       </div>
       <div className="mt-2.5 flex gap-2">
-        <Link href={`/monitor/accounts/${account.id}`} className="rounded-lg border border-[var(--border-card)] px-3 py-1.5 text-sm font-bold transition-all hover:border-[var(--border-hover)]" style={{ color: brand }}>상세</Link>
-        <button onClick={() => void onDelete(account.id)} className="rounded-lg border border-[var(--border-card)] px-3 py-1.5 text-sm font-bold text-rose-400 hover:bg-[var(--error-bg)] transition-all">삭제</button>
+        <Link href={`/monitor/accounts/${account.id}`} className="rounded-lg border border-[var(--border-card)] px-3 py-1.5 text-sm font-bold transition-all hover:border-[var(--border-hover)]" style={{ color: brand }}>{t("detail")}</Link>
+        <button onClick={() => void onDelete(account.id)} className="rounded-lg border border-[var(--border-card)] px-3 py-1.5 text-sm font-bold text-rose-400 hover:bg-[var(--error-bg)] transition-all">{t("delete")}</button>
       </div>
     </div>
   );

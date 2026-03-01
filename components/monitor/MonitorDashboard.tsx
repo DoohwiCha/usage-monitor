@@ -6,19 +6,14 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AccountUsageReport, UsageOverviewResponse } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
+import { useTranslation } from "@/lib/i18n/context";
+import LanguageSelector from "./LanguageSelector";
 
 function statusDot(status: AccountUsageReport["status"]): string {
   if (status === "ok") return "#10b981";
   if (status === "disabled") return "#71717a";
   if (status === "not_configured") return "#f59e0b";
   return "#ef4444";
-}
-
-function statusLabel(status: AccountUsageReport["status"]): string {
-  if (status === "ok") return "정상";
-  if (status === "disabled") return "비활성";
-  if (status === "not_configured") return "미설정";
-  return "오류";
 }
 
 function utilizationBarGradient(pct: number): string {
@@ -54,6 +49,7 @@ const cardVariants = {
 
 export default function MonitorDashboard({ username }: { username: string }) {
   const router = useRouter();
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<UsageOverviewResponse | null>(null);
@@ -67,7 +63,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
       const response = await fetch("/api/monitor/usage?range=month", { cache: "no-store" });
       const json = (await response.json()) as { ok: boolean; error?: string } & Partial<UsageOverviewResponse>;
       if (!response.ok || !json.ok) {
-        setError(json.error || "사용량을 불러오지 못했습니다.");
+        setError(json.error || t("dashboard.loadError"));
         setLoading(false);
         return;
       }
@@ -75,11 +71,11 @@ export default function MonitorDashboard({ username }: { username: string }) {
       setLastRefreshed(new Date());
     } catch (err) {
       console.error("Failed to load usage:", err);
-      setError("사용량 API 호출에 실패했습니다.");
+      setError(t("dashboard.apiError"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => { void loadUsage(); }, [loadUsage]);
   useEffect(() => {
@@ -112,13 +108,18 @@ export default function MonitorDashboard({ username }: { username: string }) {
     setRefreshing(false);
   }
 
+  function countDisplay(count: number): string {
+    const unit = t("countUnit");
+    return unit ? `${count} ${unit}` : `${count}`;
+  }
+
   return (
     <main className="min-h-screen surface-page">
       <div className="max-w-6xl mx-auto px-4 py-5 space-y-4">
 
         {/* Header */}
         <div className="glass-card rounded-2xl px-5 py-4 flex items-center justify-between gap-3">
-          <h1 className="text-3xl font-black gradient-text-brand">Usage Monitor</h1>
+          <h1 className="text-3xl font-black gradient-text-brand">{t("usageMonitor")}</h1>
           <div className="flex items-center gap-1.5">
             <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--surface-raised)]">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -133,7 +134,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
               <button
                 onClick={() => void handleRefresh()}
                 className="p-2 rounded-xl hover:bg-[var(--surface-raised)] transition-all"
-                title="새로고침"
+                title={t("dashboard.refresh")}
               >
                 <motion.svg
                   animate={{ rotate: refreshing ? 360 : 0 }}
@@ -148,12 +149,13 @@ export default function MonitorDashboard({ username }: { username: string }) {
                 </motion.svg>
               </button>
             </div>
+            <LanguageSelector />
             <ThemeToggle />
             <Link href="/monitor/accounts" className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
-              계정 관리
+              {t("accountManage")}
             </Link>
             <button onClick={handleLogout} className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-muted)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
-              로그아웃
+              {t("logout")}
             </button>
           </div>
         </div>
@@ -196,7 +198,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-claude)]" />
                   <h2 className="text-xl font-black" style={{ color: "var(--brand-claude)" }}>Claude</h2>
-                  <span className="text-base text-[var(--text-muted)] font-semibold">{claudeAccounts.length}개</span>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(claudeAccounts.length)}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
@@ -211,7 +213,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-openai)]" />
                   <h2 className="text-xl font-black" style={{ color: "var(--brand-openai)" }}>OpenAI</h2>
-                  <span className="text-base text-[var(--text-muted)] font-semibold">{openaiAccounts.length}개</span>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(openaiAccounts.length)}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
@@ -222,7 +224,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
 
             {claudeAccounts.length === 0 && openaiAccounts.length === 0 && (
               <div className="glass-card rounded-xl p-8 text-center">
-                <p className="text-[var(--text-muted)] font-semibold text-lg">등록된 계정이 없습니다.</p>
+                <p className="text-[var(--text-muted)] font-semibold text-lg">{t("noAccounts")}</p>
               </div>
             )}
           </>
@@ -233,8 +235,16 @@ export default function MonitorDashboard({ username }: { username: string }) {
 }
 
 function AccountCard({ account }: { account: AccountUsageReport }) {
+  const { t } = useTranslation();
   const isClaude = account.provider === "claude";
   const brand = isClaude ? "var(--brand-claude)" : "var(--brand-openai)";
+
+  function statusLabel(status: AccountUsageReport["status"]): string {
+    if (status === "ok") return t("statusOk");
+    if (status === "disabled") return t("statusDisabled");
+    if (status === "not_configured") return t("statusNotConfigured");
+    return t("statusError");
+  }
 
   return (
     <motion.div variants={cardVariants}
@@ -262,12 +272,12 @@ function AccountCard({ account }: { account: AccountUsageReport }) {
           })
         ) : account.provider === "openai" && (account.costUsd > 0 || account.requests > 0) ? (
           <div className="flex gap-3 text-sm">
-            <span className="text-[var(--text-muted)]">비용 <strong className="text-[var(--text-body)]">${account.costUsd.toFixed(2)}</strong></span>
-            <span className="text-[var(--text-muted)]">요청 <strong className="text-[var(--text-body)]">{account.requests.toLocaleString()}</strong></span>
-            <span className="text-[var(--text-muted)]">토큰 <strong className="text-[var(--text-body)]">{account.tokens.toLocaleString()}</strong></span>
+            <span className="text-[var(--text-muted)]">{t("cost")} <strong className="text-[var(--text-body)]">${account.costUsd.toFixed(2)}</strong></span>
+            <span className="text-[var(--text-muted)]">{t("requests")} <strong className="text-[var(--text-body)]">{account.requests.toLocaleString()}</strong></span>
+            <span className="text-[var(--text-muted)]">{t("tokens")} <strong className="text-[var(--text-body)]">{account.tokens.toLocaleString()}</strong></span>
           </div>
         ) : (
-          <p className="text-sm text-[var(--text-dim)]">사용량 없음</p>
+          <p className="text-sm text-[var(--text-dim)]">{t("noUsage")}</p>
         )}
       </div>
 
@@ -276,13 +286,20 @@ function AccountCard({ account }: { account: AccountUsageReport }) {
       <Link href={`/monitor/accounts/${account.accountId}`}
         className="mt-2.5 inline-flex items-center gap-1 text-base font-semibold transition-colors"
         style={{ color: brand }}>
-        상세 →
+        {t("dashboard.detailLink")}
       </Link>
     </motion.div>
   );
 }
 
 function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: AccountUsageReport[]; openaiAccounts: AccountUsageReport[] }) {
+  const { t } = useTranslation();
+
+  function countDisplay(count: number): string {
+    const unit = t("countUnit");
+    return unit ? `${count} ${unit}` : `${count}`;
+  }
+
   function buildWindowMap(accs: AccountUsageReport[]) {
     const map = new Map<string, number[]>();
     for (const acc of accs) {
@@ -309,8 +326,8 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
         <div className="glass-card rounded-xl p-4 overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }}>
           <div className="flex items-center gap-2 mb-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-claude)]" />
-            <p className="text-base font-black" style={{ color: "var(--brand-claude)" }}>Claude 평균</p>
-            <span className="text-sm text-[var(--text-muted)]">{claudeAccounts.length}개</span>
+            <p className="text-base font-black" style={{ color: "var(--brand-claude)" }}>{t("dashboard.claudeAvg")}</p>
+            <span className="text-sm text-[var(--text-muted)]">{countDisplay(claudeAccounts.length)}</span>
           </div>
           {claudeWindowMap.size > 0 ? (
             <div className="space-y-1.5">
@@ -319,15 +336,15 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
                 return <UtilizationBar key={label} pct={avg} label={label} />;
               })}
             </div>
-          ) : <p className="text-sm text-[var(--text-dim)]">데이터 없음</p>}
+          ) : <p className="text-sm text-[var(--text-dim)]">{t("noData")}</p>}
         </div>
       )}
       {openaiAccounts.length > 0 && (
         <div className="glass-card rounded-xl p-4 overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }}>
           <div className="flex items-center gap-2 mb-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-openai)]" />
-            <p className="text-base font-black" style={{ color: "var(--brand-openai)" }}>OpenAI 합계</p>
-            <span className="text-sm text-[var(--text-muted)]">{openaiAccounts.length}개</span>
+            <p className="text-base font-black" style={{ color: "var(--brand-openai)" }}>{t("dashboard.openaiTotal")}</p>
+            <span className="text-sm text-[var(--text-muted)]">{countDisplay(openaiAccounts.length)}</span>
           </div>
           {openaiWindowMap.size > 0 ? (
             <div className="space-y-1.5">
@@ -338,10 +355,10 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
             </div>
           ) : (openaiTotalCost > 0 || openaiTotalRequests > 0) ? (
             <div className="flex gap-4 text-sm">
-              <span className="text-[var(--text-muted)]">비용 <strong className="text-[var(--text-body)]">${openaiTotalCost.toFixed(2)}</strong></span>
-              <span className="text-[var(--text-muted)]">요청 <strong className="text-[var(--text-body)]">{openaiTotalRequests.toLocaleString()}</strong></span>
+              <span className="text-[var(--text-muted)]">{t("cost")} <strong className="text-[var(--text-body)]">${openaiTotalCost.toFixed(2)}</strong></span>
+              <span className="text-[var(--text-muted)]">{t("requests")} <strong className="text-[var(--text-body)]">{openaiTotalRequests.toLocaleString()}</strong></span>
             </div>
-          ) : <p className="text-sm text-[var(--text-dim)]">데이터 없음</p>}
+          ) : <p className="text-sm text-[var(--text-dim)]">{t("noData")}</p>}
         </div>
       )}
     </div>

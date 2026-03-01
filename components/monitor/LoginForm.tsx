@@ -3,9 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { useTranslation } from "@/lib/i18n/context";
+import LanguageSelector from "./LanguageSelector";
 
 export default function LoginForm() {
   const router = useRouter();
+  const { t } = useTranslation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,7 +28,7 @@ export default function LoginForm() {
 
       const data = (await response.json()) as { ok: boolean; error?: string };
       if (!response.ok || !data.ok) {
-        setError(data.error || "로그인에 실패했습니다.");
+        setError(data.error || t("login.failed"));
         setLoading(false);
         return;
       }
@@ -33,7 +36,7 @@ export default function LoginForm() {
       router.replace("/monitor");
       router.refresh();
     } catch {
-      setError("네트워크 오류가 발생했습니다.");
+      setError(t("login.networkError"));
       setLoading(false);
     }
   }
@@ -50,6 +53,11 @@ export default function LoginForm() {
         {/* Gradient top border */}
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-[#D97757] via-[#E8956F] to-[#10A37F]" />
 
+        {/* Language selector — absolute top-right of the card */}
+        <div className="absolute top-4 right-4 z-10">
+          <LanguageSelector />
+        </div>
+
         <div className="px-8 pt-8 pb-8">
           {/* Brand */}
           <div className="mb-8">
@@ -61,11 +69,11 @@ export default function LoginForm() {
                 </svg>
               </div>
               <h1 className="text-3xl font-bold gradient-text-brand tracking-tight">
-                Usage Monitor
+                {t("usageMonitor")}
               </h1>
             </div>
             <p className="text-lg text-[var(--text-muted)] leading-relaxed">
-              Claude + OpenAI 다계정 사용량을 한 화면에서 모니터링합니다.
+              {t("login.subtitle")}
             </p>
           </div>
 
@@ -76,7 +84,7 @@ export default function LoginForm() {
                 htmlFor="username"
                 className="block text-base font-semibold text-[var(--text-secondary)] uppercase tracking-wider"
               >
-                아이디
+                {t("login.username")}
               </label>
               <input
                 id="username"
@@ -85,7 +93,7 @@ export default function LoginForm() {
                 required
                 autoComplete="username"
                 className="w-full rounded-xl surface-input border border-[var(--border-input)] px-4 py-3.5 text-lg text-[var(--text-heading)] placeholder:text-[var(--text-dim)] font-medium input-focus-brand"
-                placeholder="아이디를 입력하세요"
+                placeholder={t("login.usernamePlaceholder")}
               />
             </div>
 
@@ -94,7 +102,7 @@ export default function LoginForm() {
                 htmlFor="password"
                 className="block text-base font-semibold text-[var(--text-secondary)] uppercase tracking-wider"
               >
-                비밀번호
+                {t("login.password")}
               </label>
               <input
                 id="password"
@@ -147,17 +155,17 @@ export default function LoginForm() {
                       d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                     />
                   </svg>
-                  로그인 중...
+                  {t("login.loggingIn")}
                 </span>
               ) : (
-                "로그인"
+                t("login")
               )}
             </button>
           </form>
 
           {/* Footer */}
           <p className="mt-6 text-center text-sm text-[var(--text-dim)]">
-            관리자 계정으로 로그인하세요.
+            {t("login.adminNote")}
           </p>
         </div>
       </div>
