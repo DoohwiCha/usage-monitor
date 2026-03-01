@@ -61,15 +61,15 @@ export default function MonitorDashboard({ username }: { username: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
-  const loadUsage = useCallback(async () => {
-    setLoading(true);
+  const loadUsage = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
     setError(null);
     try {
       const response = await fetch("/api/monitor/usage?range=month", { cache: "no-store" });
       const json = (await response.json()) as { ok: boolean; error?: string } & Partial<UsageOverviewResponse>;
       if (!response.ok || !json.ok) {
         setError(json.error || t("dashboard.loadError"));
-        setLoading(false);
+        if (!background) setLoading(false);
         return;
       }
       setData(json as UsageOverviewResponse);
@@ -78,14 +78,14 @@ export default function MonitorDashboard({ username }: { username: string }) {
       console.error("Failed to load usage:", err);
       setError(t("dashboard.apiError"));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { void loadUsage(); }, [loadUsage]);
+  useEffect(() => { void loadUsage(false); }, [loadUsage]);
   useEffect(() => {
-    const timer = window.setInterval(() => { void loadUsage(); }, 60_000);
+    const timer = window.setInterval(() => { void loadUsage(true); }, 60_000);
     return () => window.clearInterval(timer);
   }, [loadUsage]);
 
@@ -110,7 +110,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
 
   async function handleRefresh() {
     setRefreshing(true);
-    await loadUsage();
+    await loadUsage(true);
     setRefreshing(false);
   }
 
@@ -172,8 +172,8 @@ export default function MonitorDashboard({ username }: { username: string }) {
           )}
         </AnimatePresence>
 
-        {/* Loading skeleton */}
-        {loading && (
+        {/* Loading skeleton — only on initial load */}
+        {loading && !data && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <div key={i} className="glass-card rounded-xl p-4 space-y-2">
@@ -185,8 +185,8 @@ export default function MonitorDashboard({ username }: { username: string }) {
           </div>
         )}
 
-        {/* Main content */}
-        {!loading && data && (
+        {/* Main content — keep visible during background refresh */}
+        {data && (
           <>
             {/* Provider summary - compact */}
             <ProviderSummary
