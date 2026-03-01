@@ -30,7 +30,7 @@ function utilizationBarGradient(pct: number): string {
 function UtilizationBar({ pct, label }: { pct: number; label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="font-mono shrink-0 text-[var(--text-muted)] text-sm w-16">{label}</span>
+      <span className="font-mono shrink-0 text-[var(--text-muted)] text-sm w-20 whitespace-nowrap truncate">{label}</span>
       <div className="flex-1 h-2 bg-[var(--surface-raised)] rounded-full overflow-hidden">
         <motion.div
           className={`h-full rounded-full bg-gradient-to-r ${utilizationBarGradient(pct)}`}
