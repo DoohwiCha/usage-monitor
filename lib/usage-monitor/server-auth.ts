@@ -16,3 +16,11 @@ export async function requirePageAuth(): Promise<AuthResult> {
   }
   return auth;
 }
+
+export async function requireAdminPageAuth(): Promise<AuthResult> {
+  const auth = await requirePageAuth();
+  if (auth.user.role !== "admin") {
+    redirect("/monitor");
+  }
+  return auth;
+}

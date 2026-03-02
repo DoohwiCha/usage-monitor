@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   addMonitorAccount,
   updateMonitorAccount,
@@ -6,9 +6,8 @@ import {
   reorderMonitorAccounts,
   readMonitorConfig,
   toPublicAccount,
+  ENCRYPTION_KEY_MISMATCH_ERROR,
 } from "@/lib/usage-monitor/store";
-import { getDb } from "@/lib/usage-monitor/db";
-import { resetDb } from "./setup";
 
 describe("addMonitorAccount", () => {
   it("creates an account successfully", async () => {
@@ -116,6 +115,18 @@ describe("reorderMonitorAccounts", () => {
     expect(reordered.accounts[1].name).toBe("Second");
     expect(reordered.accounts[2].name).toBe("First");
   });
+
+  it("throws when orderedIds contains duplicates", async () => {
+    await addMonitorAccount({ name: "First", provider: "claude" });
+    await addMonitorAccount({ name: "Second", provider: "claude" });
+    const config = await readMonitorConfig();
+    const [a, b] = config.accounts.map((acc) => acc.id);
+
+    await expect(reorderMonitorAccounts([a, a])).rejects.toThrow("orderedIds must not contain duplicates.");
+    await expect(reorderMonitorAccounts([a])).rejects.toThrow("orderedIds must include every account exactly once.");
+    await expect(reorderMonitorAccounts([a, "missing"])).rejects.toThrow("orderedIds contains unknown account id.");
+    await expect(reorderMonitorAccounts([b, a, "extra"])).rejects.toThrow("orderedIds must include every account exactly once.");
+  });
 });
 
 describe("toPublicAccount", () => {
@@ -152,5 +163,39 @@ describe("toPublicAccount", () => {
     const pub = toPublicAccount(accounts[0]);
     expect(pub.hasSessionCookie).toBe(false);
     expect(pub.sessionCookieMasked).toBe("");
+  });
+});
+
+describe("encryption key mismatch handling", () => {
+  it("throws actionable error when existing encrypted data cannot be decrypted with current key", async () => {
+    await addMonitorAccount({
+      name: "Encrypted",
+      provider: "claude",
+      sessionCookie: "session=value",
+    });
+
+    const originalKey = process.env.MONITOR_ENCRYPTION_KEY;
+    process.env.MONITOR_ENCRYPTION_KEY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    try {
+      await expect(readMonitorConfig()).rejects.toThrow(ENCRYPTION_KEY_MISMATCH_ERROR);
+    } finally {
+      process.env.MONITOR_ENCRYPTION_KEY = originalKey;
+    }
+  });
+
+  it("requires MONITOR_ENCRYPTION_KEY to save secrets", async () => {
+    const originalKey = process.env.MONITOR_ENCRYPTION_KEY;
+    delete process.env.MONITOR_ENCRYPTION_KEY;
+
+    try {
+      await expect(addMonitorAccount({
+        name: "NoKey",
+        provider: "claude",
+        sessionCookie: "session=value",
+      })).rejects.toThrow("MONITOR_ENCRYPTION_KEY must be set.");
+    } finally {
+      process.env.MONITOR_ENCRYPTION_KEY = originalKey;
+    }
   });
 });

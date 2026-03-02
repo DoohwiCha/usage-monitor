@@ -53,7 +53,7 @@ const cardVariants = {
   visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] as const } },
 };
 
-export default function MonitorDashboard({ username }: { username: string }) {
+export default function MonitorDashboard({ username, role }: { username: string; role: "admin" | "viewer" }) {
   const router = useRouter();
   const { t, locale } = useTranslation();
   const tRef = useRef(t);
@@ -159,9 +159,11 @@ export default function MonitorDashboard({ username }: { username: string }) {
             </div>
             <LanguageSelector />
             <ThemeToggle />
-            <Link href="/monitor/accounts" className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
-              {t("accountManage")}
-            </Link>
+            {role === "admin" && (
+              <Link href="/monitor/accounts" className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
+                {t("accountManage")}
+              </Link>
+            )}
             <button onClick={handleLogout} className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-muted)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
               {t("logout")}
             </button>

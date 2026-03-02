@@ -3,6 +3,9 @@ import type { MonitorAccount, MonitorConfig, ProviderType, PublicMonitorAccount,
 import { getDb } from "@/lib/usage-monitor/db";
 
 const MAX_ACCOUNTS = 12;
+export const ENCRYPTION_KEY_MISMATCH_ERROR =
+  "Failed to decrypt stored secret. MONITOR_ENCRYPTION_KEY is missing or does not match the key used to encrypt existing account data.";
+const ENCRYPTION_KEY_REQUIRED_ERROR = "MONITOR_ENCRYPTION_KEY must be set.";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -25,8 +28,7 @@ function getEncryptionKey(): Buffer | null {
 function encryptSecret(plain: string): string {
   const key = getEncryptionKey();
   if (!key) {
-    if (process.env.NODE_ENV === "production") throw new Error("MONITOR_ENCRYPTION_KEY must be set in production");
-    return plain;
+    throw new Error(ENCRYPTION_KEY_REQUIRED_ERROR);
   }
 
   const iv = randomBytes(12);
@@ -37,6 +39,10 @@ function encryptSecret(plain: string): string {
   return `${iv.toString("hex")}:${tag.toString("hex")}:${ciphertext.toString("hex")}`;
 }
 
+export function isEncryptionKeyMismatchError(error: unknown): boolean {
+  return error instanceof Error && error.message === ENCRYPTION_KEY_MISMATCH_ERROR;
+}
+
 function decryptSecret(blob: string): string {
   const parts = blob.split(":");
   if (parts.length !== 3 || !parts.every((p) => /^[0-9a-f]+$/i.test(p))) {
@@ -45,8 +51,7 @@ function decryptSecret(blob: string): string {
 
   const key = getEncryptionKey();
   if (!key) {
-    if (process.env.NODE_ENV === "production") throw new Error("MONITOR_ENCRYPTION_KEY must be set in production");
-    return blob;
+    throw new Error(ENCRYPTION_KEY_MISMATCH_ERROR);
   }
 
   try {
@@ -58,7 +63,7 @@ function decryptSecret(blob: string): string {
     decipher.setAuthTag(tag);
     return decipher.update(ciphertext).toString("utf-8") + decipher.final("utf-8");
   } catch {
-    return "";
+    throw new Error(ENCRYPTION_KEY_MISMATCH_ERROR);
   }
 }
 
@@ -241,6 +246,18 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
 
 export async function reorderMonitorAccounts(orderedIds: string[]): Promise<MonitorConfig> {
   const db = getDb();
+  const currentIds = (db.prepare("SELECT id FROM accounts ORDER BY sort_order ASC, created_at ASC").all() as Array<{ id: string }>).map((r) => r.id);
+  if (orderedIds.length !== currentIds.length) {
+    throw new Error("orderedIds must include every account exactly once.");
+  }
+  if (new Set(orderedIds).size !== orderedIds.length) {
+    throw new Error("orderedIds must not contain duplicates.");
+  }
+  const currentIdSet = new Set(currentIds);
+  if (orderedIds.some((id) => !currentIdSet.has(id))) {
+    throw new Error("orderedIds contains unknown account id.");
+  }
+
   const reorder = db.transaction(() => {
     for (let i = 0; i < orderedIds.length; i++) {
       db.prepare("UPDATE accounts SET sort_order = ?, updated_at = ? WHERE id = ?").run(i, nowIso(), orderedIds[i]);

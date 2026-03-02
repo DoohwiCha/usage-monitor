@@ -59,10 +59,11 @@ describe("validateSession", () => {
     const userId = await makeUser("expireduser");
     const { token, session } = createSession(userId);
 
-    // Manually expire the session in the DB using SQLite datetime format
+    // Manually expire the session in ISO format (same format as persisted sessions)
     const db = getDb();
-    db.prepare("UPDATE sessions SET expires_at = datetime('now', '-1 second') WHERE id = ?").run(
-      session.id
+    db.prepare("UPDATE sessions SET expires_at = ? WHERE id = ?").run(
+      new Date(Date.now() - 1_000).toISOString(),
+      session.id,
     );
 
     const found = validateSession(token);
@@ -133,5 +134,27 @@ describe("cleanExpiredSessions", () => {
     // Valid session should still exist
     const remaining = getUserSessions(userId);
     expect(remaining.some((s) => s.id === validSession.id)).toBe(true);
+  });
+
+  it("removes sessions expired in ISO format", async () => {
+    const userId = await makeUser("isoexpireduser");
+    const { randomUUID, createHash } = await import("node:crypto");
+    const db = getDb();
+    const expiredToken = randomUUID();
+    const expiredHash = createHash("sha256").update(expiredToken).digest("hex");
+
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      randomUUID(),
+      userId,
+      expiredHash,
+      new Date(Date.now() - 1_000).toISOString(),
+      new Date(Date.now() - 10_000).toISOString(),
+    );
+
+    const removed = cleanExpiredSessions();
+    expect(removed).toBe(1);
   });
 });

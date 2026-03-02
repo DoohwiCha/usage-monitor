@@ -20,6 +20,9 @@ interface UserRow {
   updated_at: string;
 }
 
+export const INITIAL_ADMIN_ENV_ERROR =
+  "MONITOR_ADMIN_USER and MONITOR_ADMIN_PASS must be set to create initial admin.";
+
 function rowToUser(row: UserRow): User {
   return {
     id: row.id,
@@ -159,7 +162,7 @@ export async function ensureAdminExists(): Promise<void> {
   const username = process.env.MONITOR_ADMIN_USER;
   const password = process.env.MONITOR_ADMIN_PASS;
   if (!username || !password) {
-    throw new Error("MONITOR_ADMIN_USER and MONITOR_ADMIN_PASS must be set to create initial admin.");
+    throw new Error(INITIAL_ADMIN_ENV_ERROR);
   }
 
   await createUser(username, password, "admin");

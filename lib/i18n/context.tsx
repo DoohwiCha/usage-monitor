@@ -15,16 +15,21 @@ const LocaleContext = createContext<LocaleContextValue>({
   t: (key: TranslationKey) => key,
 });
 
+function getInitialLocale(): Locale {
+  if (typeof window === "undefined") return defaultLocale;
+  const stored = localStorage.getItem("locale");
+  if (stored && stored in translations) {
+    return stored as Locale;
+  }
+  return defaultLocale;
+}
+
 export function LocaleProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(defaultLocale);
+  const [locale, setLocaleState] = useState<Locale>(getInitialLocale);
 
   useEffect(() => {
-    const stored = localStorage.getItem("locale") as Locale | null;
-    if (stored && translations[stored]) {
-      setLocaleState(stored);
-      document.documentElement.lang = stored;
-    }
-  }, []);
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);

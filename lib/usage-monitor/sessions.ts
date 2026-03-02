@@ -55,7 +55,8 @@ export function createSession(userId: string, ip?: string, userAgent?: string): 
 export function validateSession(token: string): Session | null {
   const db = getDb();
   const tokenHash = hashToken(token);
-  const row = db.prepare("SELECT * FROM sessions WHERE token_hash = ? AND expires_at > datetime('now')").get(tokenHash) as SessionRow | undefined;
+  const nowIso = new Date().toISOString();
+  const row = db.prepare("SELECT * FROM sessions WHERE token_hash = ? AND expires_at > ?").get(tokenHash, nowIso) as SessionRow | undefined;
 
   if (!row) return null;
 
@@ -90,7 +91,8 @@ export function revokeAllUserSessions(userId: string): number {
 
 export function getUserSessions(userId: string): Session[] {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM sessions WHERE user_id = ? AND expires_at > datetime('now') ORDER BY created_at DESC").all(userId) as SessionRow[];
+  const nowIso = new Date().toISOString();
+  const rows = db.prepare("SELECT * FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC").all(userId, nowIso) as SessionRow[];
   return rows.map((row) => ({
     id: row.id,
     userId: row.user_id,
@@ -103,7 +105,8 @@ export function getUserSessions(userId: string): Session[] {
 
 export function cleanExpiredSessions(): number {
   const db = getDb();
-  const result = db.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')").run();
+  const nowIso = new Date().toISOString();
+  const result = db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(nowIso);
   return result.changes;
 }
 

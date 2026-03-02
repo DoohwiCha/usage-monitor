@@ -203,7 +203,7 @@ async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<Account
     }
     return report;
   } catch {
-    return emptyReport(account, "ok", "oh-my-codex metrics not found (~/.omx/metrics.json)");
+    return emptyReport(account, "not_configured", "oh-my-codex metrics not found (~/.omx/metrics.json)");
   }
 }
 

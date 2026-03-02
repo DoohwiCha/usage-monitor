@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import path from "node:path";
+import { mkdirSync } from "node:fs";
 
 const DB_PATH = path.join(process.cwd(), "data", "usage-monitor.db");
 
@@ -8,7 +9,6 @@ let _db: Database.Database | null = null;
 export function getDb(): Database.Database {
   if (_db) return _db;
 
-  const { mkdirSync } = require("node:fs") as typeof import("node:fs");
   mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
   _db = new Database(DB_PATH);

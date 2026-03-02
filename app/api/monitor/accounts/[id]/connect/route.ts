@@ -1,5 +1,5 @@
-import { ensureApiAuth, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
-import { readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
+import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
+import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
 import { testConnection } from "@/lib/usage-monitor/usage-adapters";
 import { secureJson } from "@/lib/usage-monitor/response";
 
@@ -11,12 +11,21 @@ export async function POST(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAuth();
+  const auth = await ensureApiAdmin();
   if (!auth.ok) return auth.response;
 
   const { id } = await context.params;
-  const config = await readMonitorConfig();
-  const account = config.accounts.find((a) => a.id === id);
+  let account: Awaited<ReturnType<typeof readMonitorConfig>>["accounts"][number] | undefined;
+  try {
+    const config = await readMonitorConfig();
+    account = config.accounts.find((a) => a.id === id);
+  } catch (error) {
+    if (isEncryptionKeyMismatchError(error)) {
+      return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
+    }
+    const message = error instanceof Error ? error.message : "Failed to read account configuration.";
+    return secureJson({ ok: false, error: message }, { status: 500 });
+  }
   if (!account) {
     return secureJson({ ok: false, error: "Account not found." }, { status: 404 });
   }

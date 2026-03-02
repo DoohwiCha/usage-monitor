@@ -18,6 +18,18 @@ export async function ensureApiAuth(): Promise<{ ok: true; auth: AuthResult } | 
   return { ok: true, auth };
 }
 
+export async function ensureApiAdmin(): Promise<{ ok: true; auth: AuthResult } | { ok: false; response: NextResponse }> {
+  const auth = await ensureApiAuth();
+  if (!auth.ok) return auth;
+  if (auth.auth.user.role !== "admin") {
+    return {
+      ok: false,
+      response: secureJson({ ok: false, error: "Forbidden." }, { status: 403 }),
+    };
+  }
+  return auth;
+}
+
 export function verifyCsrfOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   const host = request.headers.get("host");

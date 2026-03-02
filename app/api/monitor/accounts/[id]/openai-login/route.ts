@@ -1,5 +1,5 @@
-import { ensureApiAuth, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
-import { readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
+import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
+import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
 import type { SubscriptionInfo } from "@/lib/usage-monitor/types";
 import { acquireBrowserSlot, releaseBrowserSlot, BrowserPoolExhaustedError } from "@/lib/usage-monitor/browser-pool";
 import { logger } from "@/lib/usage-monitor/logger";
@@ -23,18 +23,35 @@ export async function POST(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAuth();
+  const auth = await ensureApiAdmin();
   if (!auth.ok) return auth.response;
 
   const { id } = await context.params;
-  const config = await readMonitorConfig();
-  const account = config.accounts.find((a) => a.id === id);
+  let account: Awaited<ReturnType<typeof readMonitorConfig>>["accounts"][number] | undefined;
+  try {
+    const config = await readMonitorConfig();
+    account = config.accounts.find((a) => a.id === id);
+  } catch (error) {
+    if (isEncryptionKeyMismatchError(error)) {
+      return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
+    }
+    const message = error instanceof Error ? error.message : "Failed to read account configuration.";
+    return secureJson({ ok: false, error: message }, { status: 500 });
+  }
   if (!account) {
     return secureJson({ ok: false, error: "Account not found." }, { status: 404 });
   }
   // Auto-switch provider to openai if different
   if (account.provider !== "openai") {
-    await updateMonitorAccount(id, { provider: "openai" });
+    try {
+      await updateMonitorAccount(id, { provider: "openai" });
+    } catch (error) {
+      if (isEncryptionKeyMismatchError(error)) {
+        return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
+      }
+      const message = error instanceof Error ? error.message : "Failed to update account provider.";
+      return secureJson({ ok: false, error: message }, { status: 500 });
+    }
   }
 
   let playwright;
@@ -157,7 +174,10 @@ export async function POST(request: Request, context: RouteContext) {
     const raw = error instanceof Error ? error.message : "";
 
     if (raw.includes("Timeout") || raw.includes("timeout")) {
-      return secureJson({ ok: false, error: "Login timeout (3 min). Please try again." }, { status: 408 });
+      return secureJson({ ok: false, error: "Login timeout (3 min). Please try again." }, { status: 504 });
+    }
+    if (isEncryptionKeyMismatchError(error)) {
+      return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
     }
 
     return secureJson({ ok: false, error: "Error during OpenAI login." }, { status: 500 });

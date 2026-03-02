@@ -3,5 +3,5 @@ import { requirePageAuth } from "@/lib/usage-monitor/server-auth";
 
 export default async function MonitorOverviewPage() {
   const auth = await requirePageAuth();
-  return <MonitorDashboard username={auth.user.username} />;
+  return <MonitorDashboard username={auth.user.username} role={auth.user.role} />;
 }

@@ -94,7 +94,9 @@ cp .env.example .env.local
 | `MONITOR_ADMIN_USER` | Initial admin username | **Yes** |
 | `MONITOR_ADMIN_PASS` | Initial admin password (min 8 chars) | **Yes** |
 | `MONITOR_SESSION_SECRET` | Session signing key (use `openssl rand -hex 32`) | **Yes** |
-| `MONITOR_ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM (use `openssl rand -hex 32`) | **Yes** (production) |
+| `MONITOR_ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM (use `openssl rand -hex 32`) | **Yes** |
+| `MONITOR_COOKIE_SECURE` | Override login cookie `secure` flag: `true` or `false` (default: auto by request protocol) | No |
+| `TRUST_PROXY` | Trust proxy IP headers for login rate-limit key (`true` to enable) | No |
 | `LOG_LEVEL` | Logging level: `debug`, `info`, `warn`, `error` | No (default: `info` in production) |
 
 Generate secrets:
@@ -105,6 +107,14 @@ openssl rand -hex 32  # for MONITOR_ENCRYPTION_KEY
 ```
 
 > **Note**: There are no default credentials. All environment variables must be set explicitly.
+
+### Running on Another PC (Troubleshooting)
+
+- If you moved `data/usage-monitor.db` to another machine, reuse the same `MONITOR_ENCRYPTION_KEY` value from the original machine. A different key cannot decrypt saved cookies/API keys.
+- If usage or connection checks return an encryption-key mismatch error, set the original `MONITOR_ENCRYPTION_KEY` and restart the server.
+- Login session cookie `secure` now follows request protocol automatically (`https` => secure, `http` => non-secure).
+- If reverse proxy/TLS setup needs explicit behavior, set `MONITOR_COOKIE_SECURE=true` or `MONITOR_COOKIE_SECURE=false`.
+- If you run behind a reverse proxy/CDN, set `TRUST_PROXY=true` so login rate limiting uses forwarded client IP headers.
 
 ### Run
 

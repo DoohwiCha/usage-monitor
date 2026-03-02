@@ -1,7 +1,7 @@
 import AccountsManager from "@/components/monitor/AccountsManager";
-import { requirePageAuth } from "@/lib/usage-monitor/server-auth";
+import { requireAdminPageAuth } from "@/lib/usage-monitor/server-auth";
 
 export default async function MonitorAccountsPage() {
-  await requirePageAuth();
+  await requireAdminPageAuth();
   return <AccountsManager />;
 }
