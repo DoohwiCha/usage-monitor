@@ -1,5 +1,8 @@
 import type { AccountUsageReport, ProviderUsageInfo, UtilizationWindow, MonitorAccount, ResolvedRange, UsagePoint } from "@/lib/usage-monitor/types";
 import { toUtcDayKey } from "@/lib/usage-monitor/range";
+import { withBrowser } from "@/lib/usage-monitor/browser-pool";
+import { getCached, setCached } from "@/lib/usage-monitor/usage-cache";
+import { logger } from "@/lib/usage-monitor/logger";
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -71,7 +74,7 @@ async function fetchJson(url: string, headers: HeadersInit): Promise<unknown> {
 
   if (!response.ok) {
     const body = await response.text();
-    console.error(`[fetchJson] HTTP ${response.status} from ${url}:`, body.slice(0, 500));
+    logger.error("[fetchJson] HTTP error from external API", { status: response.status, url, body: body.slice(0, 500) });
     throw new Error(`External API request failed (HTTP ${response.status})`);
   }
 
@@ -238,84 +241,85 @@ async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange):
     return emptyReport(account, "not_configured", "Session cookie is empty.");
   }
 
-  let playwright;
+  const cacheKey = `usage:${account.id}`;
+  const cached = getCached<AccountUsageReport>(cacheKey);
+  if (cached) return cached;
+
   try {
-    playwright = await import("playwright");
-  } catch {
-    return emptyReport(account, "error", "Playwright is not installed. Run `npx playwright install chromium`.");
-  }
+    const result = await withBrowser(async (browser) => {
+      const context = await browser.newContext({
+        userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      });
 
-  const browser = await playwright.chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext({
-      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    });
-
-    const cookies = parseCookieString(cookieStr);
-    if (cookies.length === 0) {
-      return emptyReport(account, "error", "Failed to parse cookies.");
-    }
-    await context.addCookies(cookies);
-
-    const page = await context.newPage();
-
-    // Minimal page load (domain establishment only — full rendering not needed)
-    await page.goto("https://claude.ai/settings", {
-      waitUntil: "domcontentloaded",
-      timeout: 15_000,
-    });
-
-    // Check for login redirect
-    const currentUrl = page.url();
-    if (currentUrl.includes("/login") || currentUrl.includes("/oauth") || currentUrl.includes("/sso")) {
-      return emptyReport(account, "error", "Session cookie expired. Please login again.");
-    }
-
-    // Parallel API calls from browser context (Cloudflare bypass)
-    const evalResult = await page.evaluate(async () => {
-      try {
-        const orgsRes = await fetch("/api/organizations");
-        if (!orgsRes.ok) return { error: `orgs ${orgsRes.status}` };
-        const orgs = await orgsRes.json() as Array<{ uuid: string; name?: string }>;
-        if (!Array.isArray(orgs) || orgs.length === 0) return { error: "no orgs" };
-
-        const orgUuid = orgs[0].uuid;
-
-        // Parallel calls for usage + billing
-        const [usageRes, billingRes] = await Promise.all([
-          fetch(`/api/organizations/${orgUuid}/usage`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
-          fetch(`/api/organizations/${orgUuid}/settings/billing`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
-        ]);
-
-        return { results: [usageRes, billingRes].filter(Boolean) };
-      } catch (e) {
-        return { error: String(e) };
+      const cookies = parseCookieString(cookieStr);
+      if (cookies.length === 0) {
+        return emptyReport(account, "error", "Failed to parse cookies.");
       }
+      await context.addCookies(cookies);
+
+      const page = await context.newPage();
+
+      // Minimal page load (domain establishment only — full rendering not needed)
+      await page.goto("https://claude.ai/settings", {
+        waitUntil: "domcontentloaded",
+        timeout: 15_000,
+      });
+
+      // Check for login redirect
+      const currentUrl = page.url();
+      if (currentUrl.includes("/login") || currentUrl.includes("/oauth") || currentUrl.includes("/sso")) {
+        return emptyReport(account, "error", "Session cookie expired. Please login again.");
+      }
+
+      // Parallel API calls from browser context (Cloudflare bypass)
+      const evalResult = await page.evaluate(async () => {
+        try {
+          const orgsRes = await fetch("/api/organizations");
+          if (!orgsRes.ok) return { error: `orgs ${orgsRes.status}` };
+          const orgs = await orgsRes.json() as Array<{ uuid: string; name?: string }>;
+          if (!Array.isArray(orgs) || orgs.length === 0) return { error: "no orgs" };
+
+          const orgUuid = orgs[0].uuid;
+
+          // Parallel calls for usage + billing
+          const [usageRes, billingRes] = await Promise.all([
+            fetch(`/api/organizations/${orgUuid}/usage`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
+            fetch(`/api/organizations/${orgUuid}/settings/billing`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
+          ]);
+
+          return { results: [usageRes, billingRes].filter(Boolean) };
+        } catch (e) {
+          return { error: String(e) };
+        }
+      });
+
+      if (!evalResult || "error" in evalResult) {
+        const errMsg = evalResult && "error" in evalResult ? String(evalResult.error) : "Data fetch failed";
+        return emptyReport(account, "error", errMsg);
+      }
+
+      const usageInfo = parseClaudeUsageInfo(evalResult.results || []);
+
+      return {
+        accountId: account.id,
+        name: account.name,
+        provider: account.provider,
+        status: "ok" as const,
+        costUsd: 0,
+        requests: 0,
+        tokens: 0,
+        points: [],
+        usageInfo,
+      };
     });
 
-    if (!evalResult || "error" in evalResult) {
-      const errMsg = evalResult && "error" in evalResult ? String(evalResult.error) : "Data fetch failed";
-      return emptyReport(account, "error", errMsg);
+    if (result.status === "ok") {
+      setCached(cacheKey, result);
     }
-
-    const usageInfo = parseClaudeUsageInfo(evalResult.results || []);
-
-    return {
-      accountId: account.id,
-      name: account.name,
-      provider: account.provider,
-      status: "ok",
-      costUsd: 0,
-      requests: 0,
-      tokens: 0,
-      points: [],
-      usageInfo,
-    };
+    return result;
   } catch (error) {
-    console.error("[fetchClaudeUsage] Error:", error);
+    logger.error("[fetchClaudeUsage] Error fetching Claude usage", { error: String(error) });
     return emptyReport(account, "error", "Failed to fetch Claude usage.");
-  } finally {
-    await browser.close().catch(() => {});
   }
 }
 
@@ -431,7 +435,7 @@ export async function testConnection(account: MonitorAccount): Promise<Connectio
 
     return { ok: false, message: "Unsupported provider." };
   } catch (error) {
-    console.error("[testConnection] Error:", error);
+    logger.error("[testConnection] Error during connection test", { error: String(error) });
     return { ok: false, message: "Error during connection test." };
   }
 }
@@ -457,7 +461,7 @@ export async function fetchUsageForAccount(account: MonitorAccount, range: Resol
     }
     return await fetchClaudeUsage(account, range);
   } catch (error) {
-    console.error("[fetchUsageForAccount] Error:", error);
+    logger.error("[fetchUsageForAccount] Error fetching usage", { accountId: account.id, error: String(error) });
     return emptyReport(account, "error", "Error fetching usage data.");
   }
 }

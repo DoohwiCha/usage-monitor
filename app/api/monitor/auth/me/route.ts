@@ -1,17 +1,15 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { getSessionCookieName, readSessionUsername } from "@/lib/usage-monitor/auth";
+import { ensureApiAuth } from "@/lib/usage-monitor/api-auth";
+import { secureJson } from "@/lib/usage-monitor/response";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(getSessionCookieName())?.value;
-  const username = readSessionUsername(token);
+  const check = await ensureApiAuth();
+  if (!check.ok) return check.response;
 
-  if (!username) {
-    return NextResponse.json({ ok: false }, { status: 401 });
-  }
-
-  return NextResponse.json({ ok: true, username });
+  return secureJson({
+    ok: true,
+    username: check.auth.user.username,
+    role: check.auth.user.role,
+  });
 }

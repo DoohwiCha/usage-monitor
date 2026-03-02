@@ -14,9 +14,10 @@ Built with Next.js 16, React 19, TypeScript, Tailwind CSS v4, and Framer Motion.
 - **Real-time Usage Tracking** — Auto-refresh every 60 seconds with background updates
 - **Rate Limit Monitoring** — Visualize Claude usage windows (5h, 7d) with progress bars
 - **Browser Login** — One-click Claude/OpenAI login via Playwright (auto-saves session cookies)
+- **Multi-User Auth** — Scrypt-hashed passwords, role-based access (admin/viewer), server-side sessions
 - **Dark / Light Theme** — Beautiful glass-morphism UI with theme toggle
 - **6 Languages** — English, Korean, Japanese, Chinese, Spanish, Portuguese
-- **Secure** — AES-256-GCM encryption, HMAC sessions, CSRF protection, CSP headers
+- **Secure** — AES-256-GCM encryption, SQLite-backed sessions, CSRF protection, CSP headers, audit logging
 
 ---
 
@@ -90,18 +91,20 @@ cp .env.example .env.local
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `MONITOR_ADMIN_USER` | Admin username | Yes (production) |
-| `MONITOR_ADMIN_PASS` | Admin password (min 8 chars) | Yes (production) |
-| `MONITOR_SESSION_SECRET` | HMAC session signing key | Yes (production) |
-| `MONITOR_ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM | Yes (production) |
+| `MONITOR_ADMIN_USER` | Initial admin username | **Yes** |
+| `MONITOR_ADMIN_PASS` | Initial admin password (min 8 chars) | **Yes** |
+| `MONITOR_SESSION_SECRET` | Session signing key (use `openssl rand -hex 32`) | **Yes** |
+| `MONITOR_ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM (use `openssl rand -hex 32`) | **Yes** (production) |
+| `LOG_LEVEL` | Logging level: `debug`, `info`, `warn`, `error` | No (default: `info` in production) |
 
-Generate an encryption key:
+Generate secrets:
 
 ```bash
-openssl rand -hex 32
+openssl rand -hex 32  # for MONITOR_SESSION_SECRET
+openssl rand -hex 32  # for MONITOR_ENCRYPTION_KEY
 ```
 
-> **Development defaults**: `admin` / `admin1234` (only in `NODE_ENV !== "production"`)
+> **Note**: There are no default credentials. All environment variables must be set explicitly.
 
 ### Run
 
@@ -116,12 +119,26 @@ npm start
 
 Open [http://localhost:3000](http://localhost:3000)
 
+### Migrate from JSON (if upgrading)
+
+If you have an existing `data/usage-monitor.json` from a previous version:
+
+```bash
+npx tsx scripts/migrate-json-to-sqlite.ts
+```
+
 ### Browser Login (Optional)
 
 To use one-click browser login for Claude/OpenAI:
 
 ```bash
 npx playwright install chromium
+```
+
+### Run Tests
+
+```bash
+npm test
 ```
 
 ---
@@ -154,18 +171,36 @@ usage-monitor/
 │   └── LanguageSelector.tsx    # i18n language picker
 ├── lib/
 │   ├── i18n/                   # Internationalization
-│   │   ├── translations.ts     # 6 languages, ~100 keys each
+│   │   ├── translations.ts     # 6 languages, type-safe keys
 │   │   └── context.tsx         # React context + useTranslation
 │   └── usage-monitor/
 │       ├── types.ts            # TypeScript types
-│       ├── store.ts            # JSON file store + AES encryption
-│       ├── auth.ts             # HMAC session auth
+│       ├── db.ts               # SQLite initialization + migrations
+│       ├── store.ts            # Account CRUD (SQLite-backed)
+│       ├── users.ts            # Multi-user management + scrypt hashing
+│       ├── sessions.ts         # Server-side session management
+│       ├── auth.ts             # Auth orchestration (login, logout, validate)
 │       ├── api-auth.ts         # API route auth + CSRF
 │       ├── server-auth.ts      # Server component auth
+│       ├── rate-limiter.ts     # SQLite-backed sliding window rate limiter
+│       ├── browser-pool.ts     # Playwright concurrency control (max 2)
+│       ├── usage-cache.ts      # In-memory usage result cache (3min TTL)
 │       ├── usage-adapters.ts   # Claude/OpenAI API adapters
-│       └── range.ts            # Date range utilities
+│       ├── range.ts            # Date range utilities
+│       ├── logger.ts           # Structured JSON logger
+│       ├── audit.ts            # Audit log (SQLite)
+│       └── response.ts         # Secure JSON response helper
+├── __tests__/                  # Unit tests (Vitest)
+│   ├── setup.ts                # Test environment setup
+│   ├── users.test.ts           # User management tests
+│   ├── sessions.test.ts        # Session management tests
+│   ├── store.test.ts           # Account store tests
+│   ├── rate-limiter.test.ts    # Rate limiter tests
+│   └── range.test.ts           # Date range tests
+├── scripts/
+│   └── migrate-json-to-sqlite.ts  # JSON → SQLite migration
 ├── middleware.ts               # Edge auth middleware
-├── data/                       # Account data (gitignored)
+├── data/                       # SQLite database (gitignored)
 └── docs/screenshots/           # App screenshots
 ```
 
@@ -175,12 +210,14 @@ usage-monitor/
 
 | Feature | Implementation |
 |---------|---------------|
-| Authentication | HMAC-SHA256 signed session tokens (12h TTL) |
-| Password | Timing-safe comparison, production enforcement |
+| Authentication | Multi-user with scrypt password hashing |
+| Sessions | Server-side SQLite sessions (12h TTL) with revocation support |
+| Rate Limiting | SQLite-backed sliding window (5 login attempts / 15 min) |
 | Encryption | AES-256-GCM for stored secrets (cookies, API keys) |
-| CSRF | Origin + Referer header validation |
-| Headers | CSP, HSTS, X-Frame-Options DENY, X-Content-Type nosniff |
-| File permissions | Store file set to `0o600` |
+| CSRF | Origin + Referer header validation (deny when absent) |
+| Headers | CSP, HSTS, X-Frame-Options DENY, X-Content-Type nosniff, no-cache on API |
+| Browser Pool | Max 2 concurrent Playwright instances to prevent resource exhaustion |
+| Audit Log | All security events logged to SQLite (login, account CRUD, session extraction) |
 | Secrets in API | Masked in all responses (`****` + last 4 chars) |
 
 ---
@@ -199,6 +236,8 @@ usage-monitor/
 - **Framework**: [Next.js 16](https://nextjs.org/) (App Router, Turbopack)
 - **UI**: [React 19](https://react.dev/), [Tailwind CSS v4](https://tailwindcss.com/), [Framer Motion](https://www.framer.com/motion/)
 - **Language**: [TypeScript 5](https://www.typescriptlang.org/) (strict mode)
+- **Database**: [SQLite](https://www.sqlite.org/) via [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) (WAL mode)
+- **Testing**: [Vitest](https://vitest.dev/) (62 unit tests)
 - **Browser Automation**: [Playwright](https://playwright.dev/) (optional)
 
 ---

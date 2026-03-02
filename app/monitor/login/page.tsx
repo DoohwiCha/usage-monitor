@@ -3,8 +3,8 @@ import LoginForm from "@/components/monitor/LoginForm";
 import { getSessionUser } from "@/lib/usage-monitor/server-auth";
 
 export default async function MonitorLoginPage() {
-  const user = await getSessionUser();
-  if (user) {
+  const auth = await getSessionUser();
+  if (auth) {
     redirect("/monitor");
   }
 

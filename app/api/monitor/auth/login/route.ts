@@ -1,31 +1,19 @@
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createSessionToken, getSessionCookieName, isValidCredential } from "@/lib/usage-monitor/auth";
+import { login, getSessionCookieName } from "@/lib/usage-monitor/auth";
+import { checkRateLimit } from "@/lib/usage-monitor/rate-limiter";
+import { secureJson } from "@/lib/usage-monitor/response";
 
 export const runtime = "nodejs";
 
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-const MAX_ATTEMPTS = 10;
-const WINDOW_MS = 60_000;
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const entry = loginAttempts.get(ip);
-  if (!entry || now > entry.resetAt) {
-    loginAttempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
-    return true;
-  }
-  if (entry.count >= MAX_ATTEMPTS) return false;
-  entry.count++;
-  return true;
-}
-
 export async function POST(request: Request) {
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  if (!checkRateLimit(ip)) {
-    return NextResponse.json(
-      { ok: false, error: "Too many login attempts. Please try again in 1 minute." },
-      { status: 429, headers: { "Retry-After": "60" } },
+
+  const rl = checkRateLimit(`login:${ip}`, "login");
+  if (!rl.allowed) {
+    const retryAfter = Math.ceil(rl.retryAfterMs / 1000);
+    return secureJson(
+      { ok: false, error: "Too many login attempts. Please try again later." },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } },
     );
   }
 
@@ -33,15 +21,21 @@ export async function POST(request: Request) {
   const username = body.username?.trim() || "";
   const password = body.password || "";
 
-  if (!isValidCredential(username, password)) {
-    return NextResponse.json({ ok: false, error: "Invalid username or password." }, { status: 401 });
+  if (!username || !password) {
+    return secureJson({ ok: false, error: "Username and password are required." }, { status: 400 });
   }
 
-  const token = createSessionToken(username);
+  const userAgent = request.headers.get("user-agent") || undefined;
+  const result = await login(username, password, ip, userAgent);
+
+  if (!result) {
+    return secureJson({ ok: false, error: "Invalid username or password." }, { status: 401 });
+  }
+
   const cookieStore = await cookies();
   cookieStore.set({
     name: getSessionCookieName(),
-    value: token,
+    value: result.token,
     httpOnly: true,
     sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
@@ -49,5 +43,5 @@ export async function POST(request: Request) {
     maxAge: 60 * 60 * 12,
   });
 
-  return NextResponse.json({ ok: true, username });
+  return secureJson({ ok: true, username: result.user.username, role: result.user.role });
 }

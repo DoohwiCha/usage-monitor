@@ -1,7 +1,10 @@
-import { NextResponse } from "next/server";
 import { ensureApiAuth, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import { readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
 import type { SubscriptionInfo } from "@/lib/usage-monitor/types";
+import { acquireBrowserSlot, releaseBrowserSlot, BrowserPoolExhaustedError } from "@/lib/usage-monitor/browser-pool";
+import { logger } from "@/lib/usage-monitor/logger";
+import { auditLog } from "@/lib/usage-monitor/audit";
+import { secureJson } from "@/lib/usage-monitor/response";
 
 const AUTH_COOKIE_NAMES = new Set([
   "__Secure-next-auth.session-token",
@@ -18,7 +21,7 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
-    return NextResponse.json({ ok: false, error: "Invalid request." }, { status: 403 });
+    return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
   const auth = await ensureApiAuth();
   if (!auth.ok) return auth.response;
@@ -27,7 +30,7 @@ export async function POST(request: Request, context: RouteContext) {
   const config = await readMonitorConfig();
   const account = config.accounts.find((a) => a.id === id);
   if (!account) {
-    return NextResponse.json({ ok: false, error: "Account not found." }, { status: 404 });
+    return secureJson({ ok: false, error: "Account not found." }, { status: 404 });
   }
   // Auto-switch provider to openai if different
   if (account.provider !== "openai") {
@@ -38,10 +41,19 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     playwright = await import("playwright");
   } catch {
-    return NextResponse.json(
+    return secureJson(
       { ok: false, error: "Playwright is not installed. Run `npx playwright install chromium`." },
       { status: 500 },
     );
+  }
+
+  try {
+    await acquireBrowserSlot();
+  } catch (err) {
+    if (err instanceof BrowserPoolExhaustedError) {
+      return secureJson({ ok: false, error: err.message }, { status: 429 });
+    }
+    throw err;
   }
 
   let browser;
@@ -114,7 +126,7 @@ export async function POST(request: Request, context: RouteContext) {
     browser = undefined;
 
     if (!cookieString || cookieString === "[]") {
-      return NextResponse.json({ ok: false, error: "Failed to extract cookies." }, { status: 502 });
+      return secureJson({ ok: false, error: "Failed to extract cookies." }, { status: 502 });
     }
 
     const displayName = extractResult.email || extractResult.name || account.name;
@@ -133,24 +145,26 @@ export async function POST(request: Request, context: RouteContext) {
       ...(subscriptionInfo ? { subscriptionInfo } : {}),
     });
     const refreshed = updated.accounts.find((a) => a.id === id);
+    auditLog("openai_session_extracted", { resourceType: "account", resourceId: id, details: displayName });
 
-    return NextResponse.json({
+    return secureJson({
       ok: true,
       message: `Login successful — ${displayName}`,
       account: refreshed ? toPublicAccount(refreshed) : undefined,
     });
   } catch (error) {
-    console.error("[openai-login] Error:", error);
+    logger.error("[openai-login] Error during login", { accountId: id, error: String(error) });
     const raw = error instanceof Error ? error.message : "";
 
     if (raw.includes("Timeout") || raw.includes("timeout")) {
-      return NextResponse.json({ ok: false, error: "Login timeout (3 min). Please try again." }, { status: 408 });
+      return secureJson({ ok: false, error: "Login timeout (3 min). Please try again." }, { status: 408 });
     }
 
-    return NextResponse.json({ ok: false, error: "Error during OpenAI login." }, { status: 500 });
+    return secureJson({ ok: false, error: "Error during OpenAI login." }, { status: 500 });
   } finally {
     if (browser) {
       await browser.close().catch(() => {});
     }
+    releaseBrowserSlot();
   }
 }

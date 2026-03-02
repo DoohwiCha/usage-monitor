@@ -13,7 +13,7 @@ export const localeNames: Record<Locale, string> = {
 
 export const defaultLocale: Locale = "en";
 
-const en: Record<string, string> = {
+const en = {
   // common
   "usageMonitor": "Usage Monitor",
   "dashboard": "Dashboard",
@@ -131,7 +131,7 @@ const en: Record<string, string> = {
   // accounts extra
   "accounts.confirmDelete": "Are you sure you want to delete this account?",
   "accounts.cancel": "Cancel",
-};
+} satisfies Record<string, string>;
 
 const ko: Record<string, string> = {
   "usageMonitor": "Usage Monitor",
@@ -689,3 +689,6 @@ const pt: Record<string, string> = {
 };
 
 export const translations: Record<Locale, Record<string, string>> = { en, ko, ja, zh, es, pt };
+
+export type TranslationKey = keyof typeof en;
+

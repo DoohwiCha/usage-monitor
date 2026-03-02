@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AccountUsageReport, UsageOverviewResponse } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
+import { type TranslationKey } from "@/lib/i18n/translations";
 import LanguageSelector from "./LanguageSelector";
 
-function countDisplay(count: number, t: (key: string) => string): string {
+function countDisplay(count: number, t: (key: TranslationKey) => string): string {
   const unit = t("countUnit");
   return unit ? `${count}${unit}` : `${count}`;
 }
@@ -55,6 +56,8 @@ const cardVariants = {
 export default function MonitorDashboard({ username }: { username: string }) {
   const router = useRouter();
   const { t, locale } = useTranslation();
+  const tRef = useRef(t);
+  tRef.current = t;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<UsageOverviewResponse | null>(null);
@@ -68,7 +71,7 @@ export default function MonitorDashboard({ username }: { username: string }) {
       const response = await fetch("/api/monitor/usage?range=month", { cache: "no-store" });
       const json = (await response.json()) as { ok: boolean; error?: string } & Partial<UsageOverviewResponse>;
       if (!response.ok || !json.ok) {
-        setError(json.error || t("dashboard.loadError"));
+        setError(json.error || tRef.current("dashboard.loadError"));
         if (!background) setLoading(false);
         return;
       }
@@ -76,11 +79,10 @@ export default function MonitorDashboard({ username }: { username: string }) {
       setLastRefreshed(new Date());
     } catch (err) {
       console.error("Failed to load usage:", err);
-      setError(t("dashboard.apiError"));
+      setError(tRef.current("dashboard.apiError"));
     } finally {
       if (!background) setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { void loadUsage(false); }, [loadUsage]);
@@ -103,7 +105,11 @@ export default function MonitorDashboard({ username }: { username: string }) {
   }, [data]);
 
   async function handleLogout() {
-    await fetch("/api/monitor/auth/logout", { method: "POST" });
+    try {
+      await fetch("/api/monitor/auth/logout", { method: "POST" });
+    } catch {
+      // Proceed to login page even if logout API fails
+    }
     router.replace("/monitor/login");
     router.refresh();
   }

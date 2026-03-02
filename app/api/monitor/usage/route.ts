@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
 import { ensureApiAuth } from "@/lib/usage-monitor/api-auth";
 import { resolveRange } from "@/lib/usage-monitor/range";
 import { readMonitorConfig } from "@/lib/usage-monitor/store";
 import { fetchUsageForAccount } from "@/lib/usage-monitor/usage-adapters";
 import type { UsageOverviewResponse } from "@/lib/usage-monitor/types";
+import { secureJson } from "@/lib/usage-monitor/response";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
     : config.accounts;
 
   if (accountId && targetAccounts.length === 0) {
-    return NextResponse.json({ ok: false, error: "Account not found." }, { status: 404 });
+    return secureJson({ ok: false, error: "Account not found." }, { status: 404 });
   }
 
   const reports = await Promise.all(targetAccounts.map((account) => fetchUsageForAccount(account, range)));
@@ -45,5 +45,5 @@ export async function GET(request: Request) {
     accounts: reports,
   };
 
-  return NextResponse.json({ ok: true, ...response });
+  return secureJson({ ok: true, ...response });
 }

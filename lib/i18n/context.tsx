@@ -1,18 +1,18 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { type Locale, defaultLocale, translations } from "./translations";
+import { type Locale, type TranslationKey, defaultLocale, translations } from "./translations";
 
 interface LocaleContextValue {
   locale: Locale;
   setLocale: (locale: Locale) => void;
-  t: (key: string) => string;
+  t: (key: TranslationKey) => string;
 }
 
 const LocaleContext = createContext<LocaleContextValue>({
   locale: defaultLocale,
   setLocale: () => {},
-  t: (key) => key,
+  t: (key: TranslationKey) => key,
 });
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
@@ -33,7 +33,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const t = useCallback(
-    (key: string) => translations[locale]?.[key] ?? translations[defaultLocale]?.[key] ?? key,
+    (key: TranslationKey) => translations[locale]?.[key] ?? translations[defaultLocale]?.[key] ?? key,
     [locale],
   );
 

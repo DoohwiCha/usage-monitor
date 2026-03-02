@@ -1,10 +1,8 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import type { MonitorAccount, MonitorConfig, ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/types";
+import type { MonitorAccount, MonitorConfig, ProviderType, PublicMonitorAccount, SubscriptionInfo } from "@/lib/usage-monitor/types";
+import { getDb } from "@/lib/usage-monitor/db";
 
 const MAX_ACCOUNTS = 12;
-const STORE_PATH = path.join(process.cwd(), "data", "usage-monitor.json");
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -40,16 +38,15 @@ function encryptSecret(plain: string): string {
 }
 
 function decryptSecret(blob: string): string {
-  // Detect encrypted format: three colon-separated hex segments
   const parts = blob.split(":");
   if (parts.length !== 3 || !parts.every((p) => /^[0-9a-f]+$/i.test(p))) {
-    return blob; // Not encrypted, return as-is (backward compat)
+    return blob;
   }
 
   const key = getEncryptionKey();
   if (!key) {
     if (process.env.NODE_ENV === "production") throw new Error("MONITOR_ENCRYPTION_KEY must be set in production");
-    return blob; // No key available, return raw
+    return blob;
   }
 
   try {
@@ -61,7 +58,6 @@ function decryptSecret(blob: string): string {
     decipher.setAuthTag(tag);
     return decipher.update(ciphertext).toString("utf-8") + decipher.final("utf-8");
   } catch {
-    // Decryption failed (wrong key, corrupted data), return empty string
     return "";
   }
 }
@@ -83,64 +79,38 @@ function validateAccountInput(input: Partial<MonitorAccount>): void {
   }
 }
 
-// ---
+// --- DB row <-> domain model ---
 
-function buildDefaultConfig(): MonitorConfig {
-  const stamp = nowIso();
+interface AccountRow {
+  id: string;
+  name: string;
+  provider: string;
+  enabled: number;
+  session_cookie: string | null;
+  api_key: string | null;
+  organization_id: string | null;
+  subscription_info: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToAccount(row: AccountRow): MonitorAccount {
   return {
-    maxAccounts: MAX_ACCOUNTS,
-    accounts: [],
-    createdAt: stamp,
-    updatedAt: stamp,
+    id: row.id,
+    name: row.name,
+    provider: row.provider as ProviderType,
+    enabled: row.enabled === 1,
+    sessionCookie: row.session_cookie ? decryptSecret(row.session_cookie).trim() || undefined : undefined,
+    apiKey: row.api_key ? decryptSecret(row.api_key).trim() || undefined : undefined,
+    organizationId: row.organization_id?.trim() || undefined,
+    subscriptionInfo: row.subscription_info ? JSON.parse(row.subscription_info) as SubscriptionInfo : undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
-async function ensureStoreExists(): Promise<void> {
-  const dir = path.dirname(STORE_PATH);
-  await fs.mkdir(dir, { recursive: true });
-
-  try {
-    await fs.access(STORE_PATH);
-  } catch {
-    const defaultConfig = buildDefaultConfig();
-    await fs.writeFile(STORE_PATH, JSON.stringify(defaultConfig, null, 2), "utf-8");
-    await fs.chmod(STORE_PATH, 0o600);
-  }
-}
-
-function normalizeConfig(config: MonitorConfig): MonitorConfig {
-  const safeAccounts: MonitorAccount[] = config.accounts.slice(0, MAX_ACCOUNTS).map((acct) => ({
-    id: acct.id,
-    name: acct.name || "Account",
-    provider: acct.provider,
-    enabled: Boolean(acct.enabled),
-    sessionCookie: acct.sessionCookie ? decryptSecret(acct.sessionCookie).trim() || undefined : undefined,
-    apiKey: acct.apiKey ? decryptSecret(acct.apiKey).trim() || undefined : undefined,
-    organizationId: acct.organizationId?.trim() || undefined,
-    subscriptionInfo: acct.subscriptionInfo,
-    createdAt: acct.createdAt,
-    updatedAt: acct.updatedAt,
-  }));
-
-  return {
-    ...config,
-    maxAccounts: MAX_ACCOUNTS,
-    accounts: safeAccounts,
-    createdAt: config.createdAt,
-    updatedAt: config.updatedAt,
-  };
-}
-
-function encryptConfigSecrets(config: MonitorConfig): MonitorConfig {
-  return {
-    ...config,
-    accounts: config.accounts.map((acct) => ({
-      ...acct,
-      sessionCookie: acct.sessionCookie ? encryptSecret(acct.sessionCookie) : undefined,
-      apiKey: acct.apiKey ? encryptSecret(acct.apiKey) : undefined,
-    })),
-  };
-}
+// --- Public API (same signatures as before) ---
 
 export function toPublicAccount(account: MonitorAccount): PublicMonitorAccount {
   return {
@@ -160,108 +130,133 @@ export function toPublicAccount(account: MonitorAccount): PublicMonitorAccount {
 }
 
 export async function readMonitorConfig(): Promise<MonitorConfig> {
-  await ensureStoreExists();
-  const raw = await fs.readFile(STORE_PATH, "utf-8");
-  const parsed = JSON.parse(raw) as MonitorConfig;
-  const normalized = normalizeConfig(parsed);
-  return normalized;
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM accounts ORDER BY sort_order ASC, created_at ASC").all() as AccountRow[];
+  const accounts = rows.slice(0, MAX_ACCOUNTS).map(rowToAccount);
+
+  return {
+    maxAccounts: MAX_ACCOUNTS,
+    accounts,
+    createdAt: accounts[0]?.createdAt || nowIso(),
+    updatedAt: nowIso(),
+  };
 }
 
-export async function writeMonitorConfig(config: MonitorConfig): Promise<void> {
-  const normalized = normalizeConfig({
-    ...config,
-    updatedAt: nowIso(),
-  });
-  const encrypted = encryptConfigSecrets(normalized);
-  await fs.writeFile(STORE_PATH, JSON.stringify(encrypted, null, 2), "utf-8");
-  await fs.chmod(STORE_PATH, 0o600);
+export async function writeMonitorConfig(_config: MonitorConfig): Promise<void> {
+  // No-op: individual mutations handle their own writes via SQLite transactions.
+  // This function is kept for backward compatibility with any callers.
 }
 
 export async function addMonitorAccount(input: Partial<MonitorAccount>): Promise<MonitorConfig> {
   validateAccountInput(input);
 
-  const config = await readMonitorConfig();
-  if (config.accounts.length >= MAX_ACCOUNTS) {
+  const db = getDb();
+  const count = (db.prepare("SELECT COUNT(*) as cnt FROM accounts").get() as { cnt: number }).cnt;
+  if (count >= MAX_ACCOUNTS) {
     throw new Error(`Maximum ${MAX_ACCOUNTS} accounts allowed.`);
   }
 
   const stamp = nowIso();
-  const account: MonitorAccount = {
-    id: randomUUID(),
-    name: input.name?.trim() || `Account ${config.accounts.length + 1}`,
-    provider: (input.provider as ProviderType) || "claude",
-    enabled: Boolean(input.enabled),
-    sessionCookie: input.sessionCookie?.trim() || undefined,
-    apiKey: input.apiKey?.trim() || undefined,
-    organizationId: input.organizationId?.trim() || undefined,
-    subscriptionInfo: input.subscriptionInfo,
-    createdAt: stamp,
-    updatedAt: stamp,
-  };
+  const id = randomUUID();
+  const maxOrder = (db.prepare("SELECT COALESCE(MAX(sort_order), -1) as mx FROM accounts").get() as { mx: number }).mx;
 
-  config.accounts.push(account);
-  await writeMonitorConfig(config);
+  const insertAccount = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO accounts (id, name, provider, enabled, session_cookie, api_key, organization_id, subscription_info, sort_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.name?.trim() || `Account ${count + 1}`,
+      (input.provider as ProviderType) || "claude",
+      input.enabled ? 1 : 0,
+      input.sessionCookie?.trim() ? encryptSecret(input.sessionCookie.trim()) : null,
+      input.apiKey?.trim() ? encryptSecret(input.apiKey.trim()) : null,
+      input.organizationId?.trim() || null,
+      input.subscriptionInfo ? JSON.stringify(input.subscriptionInfo) : null,
+      maxOrder + 1,
+      stamp,
+      stamp,
+    );
+  });
+  insertAccount();
+
   return readMonitorConfig();
 }
 
 export async function updateMonitorAccount(id: string, updates: Partial<MonitorAccount>): Promise<MonitorConfig> {
   validateAccountInput(updates);
 
-  const config = await readMonitorConfig();
-  const idx = config.accounts.findIndex((acct) => acct.id === id);
-  if (idx < 0) {
+  const db = getDb();
+  const existing = db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRow | undefined;
+  if (!existing) {
     throw new Error("Account not found.");
   }
 
-  const current = config.accounts[idx];
-  const merged: MonitorAccount = {
-    id: current.id,
-    name: updates.name !== undefined ? (updates.name.trim() || current.name) : current.name,
-    provider: updates.provider !== undefined ? updates.provider : current.provider,
-    enabled: updates.enabled !== undefined ? Boolean(updates.enabled) : current.enabled,
-    sessionCookie: updates.sessionCookie !== undefined ? (updates.sessionCookie.trim() || undefined) : current.sessionCookie,
-    apiKey: updates.apiKey !== undefined ? (updates.apiKey.trim() || undefined) : current.apiKey,
-    organizationId: updates.organizationId !== undefined ? (updates.organizationId.trim() || undefined) : current.organizationId,
-    subscriptionInfo: updates.subscriptionInfo !== undefined ? updates.subscriptionInfo : current.subscriptionInfo,
-    createdAt: current.createdAt,
-    updatedAt: nowIso(),
-  };
+  const current = rowToAccount(existing);
+  const stamp = nowIso();
 
-  config.accounts[idx] = merged;
-  await writeMonitorConfig(config);
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.name !== undefined) {
+    setClauses.push("name = ?");
+    values.push(updates.name.trim() || current.name);
+  }
+  if (updates.provider !== undefined) {
+    setClauses.push("provider = ?");
+    values.push(updates.provider);
+  }
+  if (updates.enabled !== undefined) {
+    setClauses.push("enabled = ?");
+    values.push(updates.enabled ? 1 : 0);
+  }
+  if (updates.sessionCookie !== undefined) {
+    setClauses.push("session_cookie = ?");
+    const trimmed = updates.sessionCookie.trim();
+    values.push(trimmed ? encryptSecret(trimmed) : null);
+  }
+  if (updates.apiKey !== undefined) {
+    setClauses.push("api_key = ?");
+    const trimmed = updates.apiKey.trim();
+    values.push(trimmed ? encryptSecret(trimmed) : null);
+  }
+  if (updates.organizationId !== undefined) {
+    setClauses.push("organization_id = ?");
+    values.push(updates.organizationId.trim() || null);
+  }
+  if (updates.subscriptionInfo !== undefined) {
+    setClauses.push("subscription_info = ?");
+    values.push(updates.subscriptionInfo ? JSON.stringify(updates.subscriptionInfo) : null);
+  }
+
+  if (setClauses.length > 0) {
+    setClauses.push("updated_at = ?");
+    values.push(stamp);
+    values.push(id);
+    db.prepare(`UPDATE accounts SET ${setClauses.join(", ")} WHERE id = ?`).run(...values);
+  }
+
   return readMonitorConfig();
 }
 
 export async function reorderMonitorAccounts(orderedIds: string[]): Promise<MonitorConfig> {
-  const config = await readMonitorConfig();
-  const accountMap = new Map(config.accounts.map((a) => [a.id, a]));
-  const reordered: MonitorAccount[] = [];
-
-  for (const id of orderedIds) {
-    const acct = accountMap.get(id);
-    if (acct) {
-      reordered.push(acct);
-      accountMap.delete(id);
+  const db = getDb();
+  const reorder = db.transaction(() => {
+    for (let i = 0; i < orderedIds.length; i++) {
+      db.prepare("UPDATE accounts SET sort_order = ?, updated_at = ? WHERE id = ?").run(i, nowIso(), orderedIds[i]);
     }
-  }
-  // Append remaining accounts
-  for (const acct of accountMap.values()) {
-    reordered.push(acct);
-  }
+  });
+  reorder();
 
-  config.accounts = reordered;
-  await writeMonitorConfig(config);
   return readMonitorConfig();
 }
 
 export async function deleteMonitorAccount(id: string): Promise<MonitorConfig> {
-  const config = await readMonitorConfig();
-  const filtered = config.accounts.filter((acct) => acct.id !== id);
-  if (filtered.length === config.accounts.length) {
+  const db = getDb();
+  const result = db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+  if (result.changes === 0) {
     throw new Error("Account not found.");
   }
 
-  config.accounts = filtered;
-  await writeMonitorConfig(config);
   return readMonitorConfig();
 }

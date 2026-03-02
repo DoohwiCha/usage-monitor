@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "@/lib/i18n/context";
+import { type TranslationKey } from "@/lib/i18n/translations";
 import ThemeToggle from "@/components/monitor/ThemeToggle";
 import LanguageSelector from "@/components/monitor/LanguageSelector";
 
-const features = [
+const features: { titleKey: TranslationKey; descKey: TranslationKey; icon: ReactNode }[] = [
   {
     titleKey: "landing.feature1Title",
     descKey: "landing.feature1Desc",

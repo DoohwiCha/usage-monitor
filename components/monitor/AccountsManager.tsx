@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
@@ -18,21 +18,22 @@ interface AccountsResponse {
 
 export default function AccountsManager() {
   const { t } = useTranslation();
+  const tRef = useRef(t);
+  tRef.current = t;
   const [accounts, setAccounts] = useState<PublicMonitorAccount[]>([]);
   const [maxAccounts, setMaxAccounts] = useState(12);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newAccount, setNewAccount] = useState({ name: "", provider: "claude" as ProviderType, enabled: false, sessionCookie: "", apiKey: "", organizationId: "" });
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const loadAccounts = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const res = await fetch("/api/monitor/accounts", { cache: "no-store" });
       const json = (await res.json()) as AccountsResponse;
-      if (!res.ok || !json.ok) { setError(json.error || t("accounts.loadError")); setLoading(false); return; }
+      if (!res.ok || !json.ok) { setError(json.error || tRef.current("accounts.loadError")); setLoading(false); return; }
       setAccounts(json.accounts); setMaxAccounts(json.maxAccounts);
-    } catch (err) { console.error(err); setError(t("accounts.apiCallError")); } finally { setLoading(false); }
+    } catch (err) { console.error(err); setError(tRef.current("accounts.apiCallError")); } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { void loadAccounts(); }, [loadAccounts]);

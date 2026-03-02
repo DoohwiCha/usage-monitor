@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AccountUsageReport, UtilizationWindow, ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
@@ -11,6 +11,8 @@ import { ToggleSwitch, Spinner, brandVar, brandLightVar } from "./shared";
 
 export default function AccountDetail({ id }: { id: string }) {
   const { t } = useTranslation();
+  const tRef = useRef(t);
+  tRef.current = t;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<PublicMonitorAccount | null>(null);
@@ -22,7 +24,6 @@ export default function AccountDetail({ id }: { id: string }) {
   const [openaiLogging, setOpenaiLogging] = useState(false);
   const [form, setForm] = useState({ name: "", provider: "claude" as ProviderType, enabled: false, sessionCookie: "", apiKey: "", organizationId: "" });
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
