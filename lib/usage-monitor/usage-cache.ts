@@ -8,7 +8,7 @@ const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 minutes (Claude /usage has strict r
 
 // Rate-limit backoff: tracks when an account was last rate-limited
 const rateLimitBackoff = new Map<string, number>(); // key -> backoff-until timestamp
-const RATE_LIMIT_BACKOFF_MS = 30 * 60 * 1000; // 30 minutes after 429
+const RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000; // 5 minutes after 429 (rate limit clears quickly)
 
 // Stale cache: keeps last-known-good data even after primary cache expires
 const staleCache = new Map<string, unknown>();

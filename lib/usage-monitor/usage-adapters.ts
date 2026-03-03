@@ -493,7 +493,7 @@ async function fetchClaudeUsageDirect(account: MonitorAccount, allowCfRefresh = 
       try { dataList.push(await usageRes.json()); } catch { /* skip */ }
     } else if (usageRes.status === 429) {
       markRateLimited(`usage:${account.id}`);
-      logger.warn("[fetchClaudeUsageDirect] Usage API rate-limited, backing off 30min", { accountId: account.id });
+      logger.warn("[fetchClaudeUsageDirect] Usage API rate-limited, backing off 5min", { accountId: account.id });
     } else {
       logger.warn("[fetchClaudeUsageDirect] Usage API returned non-OK", {
         accountId: account.id,
@@ -597,17 +597,21 @@ export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: 
         logger.info("[fetchClaudeUsageBatch] Rate-limited, returning stale data", { accountId: account.id });
         results.push(stale);
       } else {
-        results.push(emptyReport(account, "error", "Rate limited by Claude. Will retry automatically in ~30 min."));
+        results.push(emptyReport(account, "error", "Rate limited by Claude. Will retry automatically in ~5 min."));
       }
       continue;
     }
 
-    // Delay between accounts to respect rate limits
-    if (i > 0) await new Promise(r => setTimeout(r, 5_000));
+    // Stagger requests: 30s between accounts to avoid rate limits
+    if (i > 0) await new Promise(r => setTimeout(r, 30_000));
 
     try {
       const report = await fetchClaudeUsageDirect(account);
-      if (report.status === "ok") setCached(cacheKey, report);
+      if (report.status === "ok") {
+        // Stagger cache TTL so accounts don't all expire at once (10-15 min)
+        const jitter = Math.floor(Math.random() * 5 * 60 * 1000);
+        setCached(cacheKey, report, 10 * 60 * 1000 + jitter);
+      }
       results.push(report);
     } catch (error) {
       logger.error("[fetchClaudeUsageBatch] Error for account", { accountId: account.id, error: String(error) });
