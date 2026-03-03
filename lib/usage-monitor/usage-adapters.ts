@@ -525,102 +525,119 @@ async function fetchClaudeUsageDirect(account: MonitorAccount, allowCfRefresh = 
   }
 }
 
-/** Fetch usage for all Claude accounts: OAuth → direct fetch → cached. */
-export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: ResolvedRange): Promise<AccountUsageReport[]> {
-  const results: AccountUsageReport[] = [];
+// ─── SQLite usage snapshot persistence ───────────────────────────
 
-  // Separate cached vs uncached
-  const uncached: MonitorAccount[] = [];
+function saveSnapshot(accountId: string, report: AccountUsageReport): void {
+  try {
+    const { getDb } = require("@/lib/usage-monitor/db");
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO usage_snapshots (account_id, fetched_at, usage_json)
+      VALUES (?, datetime('now'), ?)
+      ON CONFLICT(account_id) DO UPDATE SET fetched_at = datetime('now'), usage_json = excluded.usage_json
+    `).run(accountId, JSON.stringify(report));
+  } catch { /* table may not exist yet on first run */ }
+}
+
+function loadSnapshot(account: MonitorAccount): AccountUsageReport | null {
+  try {
+    const { getDb } = require("@/lib/usage-monitor/db");
+    const db = getDb();
+    const row = db.prepare("SELECT usage_json FROM usage_snapshots WHERE account_id = ?").get(account.id) as { usage_json: string } | undefined;
+    if (!row) return null;
+    return JSON.parse(row.usage_json) as AccountUsageReport;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Rotating queue: fetch 1 account per cycle ───────────────────
+
+let claudeQueueIndex = 0;
+
+/** Fetch usage for all Claude accounts: rotating queue (1 per cycle), with persistent snapshots. */
+export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: ResolvedRange): Promise<AccountUsageReport[]> {
+  // Step 1: Build results from cache → stale → DB snapshot → empty
+  const results: Map<string, AccountUsageReport> = new Map();
   for (const account of accounts) {
     if (!account.sessionCookie) {
-      results.push(emptyReport(account, "not_configured", "Session cookie is empty."));
+      results.set(account.id, emptyReport(account, "not_configured", "Session cookie is empty."));
       continue;
     }
     const cached = getCached<AccountUsageReport>(`usage:${account.id}`);
-    if (cached) {
-      results.push(cached);
-      continue;
-    }
-    uncached.push(account);
+    if (cached) { results.set(account.id, cached); continue; }
+    const stale = getStale<AccountUsageReport>(`usage:${account.id}`);
+    if (stale) { results.set(account.id, stale); continue; }
+    const snapshot = loadSnapshot(account);
+    if (snapshot) { results.set(account.id, snapshot); continue; }
+    results.set(account.id, emptyReport(account, "ok"));
   }
 
-  if (uncached.length === 0) return results;
+  // Step 2: Find accounts eligible for a fresh fetch (not cached, not rate-limited)
+  const eligible = accounts.filter(a =>
+    a.sessionCookie &&
+    !getCached<AccountUsageReport>(`usage:${a.id}`) &&
+    !isRateLimited(`usage:${a.id}`)
+  );
 
-  // Phase 1: Try OAuth direct API for matching accounts
-  const oauthHandled = new Set<string>();
+  if (eligible.length === 0) {
+    return accounts.map(a => results.get(a.id) || emptyReport(a, "error", "Unknown error"));
+  }
+
+  // Step 3: Try OAuth for one matching account (if credentials exist)
+  let oauthHandledId: string | null = null;
   try {
     const creds = await getValidOAuthCredentials();
     if (creds) {
       const profile = await fetchOAuthProfile(creds.accessToken);
       if (profile) {
         const profileEmail = profile.email.toLowerCase();
-        const matchedAccount = uncached.find(a => {
+        const matchedAccount = eligible.find(a => {
           const name = a.name.toLowerCase();
           return name === profileEmail || name.includes(profileEmail) || profileEmail.includes(name.split("@")[0]);
         });
         if (matchedAccount) {
-          logger.info("[fetchClaudeUsageBatch] Using OAuth API for account", { accountId: matchedAccount.id, email: profile.email });
           const usageInfo = await fetchClaudeUsageViaOAuth(creds.accessToken);
           if (usageInfo.windows.length > 0) {
             const report: AccountUsageReport = {
-              accountId: matchedAccount.id,
-              name: matchedAccount.name,
-              provider: matchedAccount.provider,
-              status: "ok",
-              costUsd: 0,
-              requests: 0,
-              tokens: 0,
-              points: [],
-              usageInfo,
+              accountId: matchedAccount.id, name: matchedAccount.name,
+              provider: matchedAccount.provider, status: "ok",
+              costUsd: 0, requests: 0, tokens: 0, points: [], usageInfo,
             };
             setCached(`usage:${matchedAccount.id}`, report);
-            results.push(report);
-            oauthHandled.add(matchedAccount.id);
+            saveSnapshot(matchedAccount.id, report);
+            results.set(matchedAccount.id, report);
+            oauthHandledId = matchedAccount.id;
           }
         }
       }
     }
-  } catch (error) {
-    logger.warn("[fetchClaudeUsageBatch] OAuth attempt skipped", { error: String(error) });
-  }
+  } catch { /* skip OAuth */ }
 
-  // Phase 2: Direct fetch for remaining accounts (no browser needed!)
-  const remaining = uncached.filter(a => !oauthHandled.has(a.id));
-  for (let i = 0; i < remaining.length; i++) {
-    const account = remaining[i];
-    const cacheKey = `usage:${account.id}`;
+  // Step 4: Pick ONE account from the rotating queue (not the OAuth one)
+  const fetchable = eligible.filter(a => a.id !== oauthHandledId);
+  if (fetchable.length > 0) {
+    const account = fetchable[claudeQueueIndex % fetchable.length];
+    claudeQueueIndex++;
 
-    // Skip if rate-limited — return stale data or a friendly message
-    if (isRateLimited(cacheKey)) {
-      const stale = getStale<AccountUsageReport>(cacheKey);
-      if (stale) {
-        logger.info("[fetchClaudeUsageBatch] Rate-limited, returning stale data", { accountId: account.id });
-        results.push(stale);
-      } else {
-        results.push(emptyReport(account, "error", "Rate limited by Claude. Will retry automatically in ~5 min."));
-      }
-      continue;
-    }
-
-    // Stagger requests: 30s between accounts to avoid rate limits
-    if (i > 0) await new Promise(r => setTimeout(r, 30_000));
+    logger.info("[fetchClaudeUsageBatch] Rotating fetch", {
+      accountId: account.id, name: account.name, queuePos: claudeQueueIndex,
+    });
 
     try {
       const report = await fetchClaudeUsageDirect(account);
       if (report.status === "ok") {
-        // Stagger cache TTL so accounts don't all expire at once (10-15 min)
         const jitter = Math.floor(Math.random() * 5 * 60 * 1000);
-        setCached(cacheKey, report, 10 * 60 * 1000 + jitter);
+        setCached(`usage:${account.id}`, report, 10 * 60 * 1000 + jitter);
+        saveSnapshot(account.id, report);
       }
-      results.push(report);
+      results.set(account.id, report);
     } catch (error) {
-      logger.error("[fetchClaudeUsageBatch] Error for account", { accountId: account.id, error: String(error) });
-      results.push(emptyReport(account, "error", "Failed to fetch Claude usage."));
+      logger.error("[fetchClaudeUsageBatch] Fetch error", { accountId: account.id, error: String(error) });
     }
   }
 
-  // Sort results to match original account order
-  return accounts.map(a => results.find(r => r.accountId === a.id) || emptyReport(a, "error", "Unknown error"));
+  return accounts.map(a => results.get(a.id) || emptyReport(a, "error", "Unknown error"));
 }
 
 interface ClaudeUtilizationRaw {

@@ -108,6 +108,16 @@ function runMigrations(db: Database.Database): void {
         CREATE INDEX idx_audit_log_user_id ON audit_log(user_id);
       `);
     },
+    // v6: usage_snapshots — persist last-known-good usage data across restarts
+    (db) => {
+      db.exec(`
+        CREATE TABLE usage_snapshots (
+          account_id TEXT NOT NULL PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+          fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+          usage_json TEXT NOT NULL
+        );
+      `);
+    },
   ];
 
   if (currentVersion < migrations.length) {
