@@ -1,6 +1,6 @@
 import type { Browser } from "playwright";
 
-const MAX_CONCURRENT_BROWSERS = 2;
+const MAX_CONCURRENT_BROWSERS = 3;
 let activeBrowserCount = 0;
 const waitQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 
@@ -11,7 +11,7 @@ export class BrowserPoolExhaustedError extends Error {
   }
 }
 
-export async function acquireBrowserSlot(timeoutMs = 30_000): Promise<void> {
+export async function acquireBrowserSlot(timeoutMs = 120_000): Promise<void> {
   if (activeBrowserCount < MAX_CONCURRENT_BROWSERS) {
     activeBrowserCount++;
     return;
@@ -43,7 +43,17 @@ export async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Prom
   try {
     const pw = await import("playwright").catch(() => null);
     if (!pw) throw new Error("Playwright is not installed.");
-    browser = await pw.chromium.launch({ headless: true });
+    browser = await pw.chromium.launch({
+      headless: false,
+      args: [
+        "--disable-gpu",
+        "--disable-gpu-compositing",
+        "--use-gl=swiftshader",
+        "--no-sandbox",
+        "--ozone-platform=x11",
+        "--disable-blink-features=AutomationControlled",
+      ],
+    });
     return await fn(browser);
   } finally {
     if (browser) await browser.close().catch(() => {});

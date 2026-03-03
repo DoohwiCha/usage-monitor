@@ -75,7 +75,15 @@ export async function POST(request: Request, context: RouteContext) {
 
   let browser;
   try {
-    browser = await playwright.chromium.launch({ headless: false });
+    browser = await playwright.chromium.launch({
+      headless: false,
+      args: [
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+        "--enable-unsafe-swiftshader",
+        "--no-sandbox",
+      ],
+    });
     const browserContext = await browser.newContext();
     const page = await browserContext.newPage();
 

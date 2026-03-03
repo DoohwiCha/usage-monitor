@@ -1,7 +1,7 @@
 import { ensureApiAuth } from "@/lib/usage-monitor/api-auth";
 import { resolveRange } from "@/lib/usage-monitor/range";
 import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig } from "@/lib/usage-monitor/store";
-import { fetchUsageForAccount } from "@/lib/usage-monitor/usage-adapters";
+import { fetchUsageForAccount, fetchClaudeUsageBatch } from "@/lib/usage-monitor/usage-adapters";
 import type { UsageOverviewResponse } from "@/lib/usage-monitor/types";
 import { secureJson } from "@/lib/usage-monitor/response";
 
@@ -25,7 +25,20 @@ export async function GET(request: Request) {
       return secureJson({ ok: false, error: "Account not found." }, { status: 404 });
     }
 
-    const reports = await Promise.all(targetAccounts.map((account) => fetchUsageForAccount(account, range)));
+    // Batch Claude accounts in single browser, fetch others individually
+    const claudeAccounts = targetAccounts.filter(a => a.enabled && a.provider === "claude" && a.sessionCookie);
+    const otherAccounts = targetAccounts.filter(a => !a.enabled || a.provider !== "claude" || !a.sessionCookie);
+
+    const [claudeReports, ...otherReports] = await Promise.all([
+      claudeAccounts.length > 0 ? fetchClaudeUsageBatch(claudeAccounts, range) : Promise.resolve([]),
+      ...otherAccounts.map(account => fetchUsageForAccount(account, range)),
+    ]);
+
+    // Merge and sort to match original order
+    const reportMap = new Map<string, typeof otherReports[0]>();
+    for (const r of claudeReports) reportMap.set(r.accountId, r);
+    for (const r of otherReports) reportMap.set(r.accountId, r);
+    const reports = targetAccounts.map(a => reportMap.get(a.id) || { accountId: a.id, name: a.name, provider: a.provider, status: "error" as const, costUsd: 0, requests: 0, tokens: 0, points: [], error: "Unknown error" });
 
     const response: UsageOverviewResponse = {
       range: {

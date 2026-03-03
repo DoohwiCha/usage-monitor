@@ -1,7 +1,7 @@
 import type { AccountUsageReport, ProviderUsageInfo, UtilizationWindow, MonitorAccount, ResolvedRange, UsagePoint } from "@/lib/usage-monitor/types";
 import { toUtcDayKey } from "@/lib/usage-monitor/range";
-import { withBrowser } from "@/lib/usage-monitor/browser-pool";
-import { getCached, setCached } from "@/lib/usage-monitor/usage-cache";
+
+import { getCached, setCached, getStale, isRateLimited, markRateLimited } from "@/lib/usage-monitor/usage-cache";
 import { logger } from "@/lib/usage-monitor/logger";
 
 function toNumber(value: unknown): number {
@@ -235,92 +235,388 @@ function parseCookieString(cookieStr: string, domain = ".claude.ai"): Array<{ na
     .filter((c): c is { name: string; value: string; domain: string; path: string; secure?: boolean } => c !== null);
 }
 
-async function fetchClaudeUsage(account: MonitorAccount, _range: ResolvedRange): Promise<AccountUsageReport> {
-  const cookieStr = account.sessionCookie || "";
-  if (!cookieStr) {
-    return emptyReport(account, "not_configured", "Session cookie is empty.");
-  }
+// ─── Claude OAuth Direct API (no Playwright needed) ──────────────
 
-  const cacheKey = `usage:${account.id}`;
-  const cached = getCached<AccountUsageReport>(cacheKey);
-  if (cached) return cached;
+interface OAuthCredentials {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}
+
+function readLocalOAuthCredentials(): OAuthCredentials | null {
+  try {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
+    const raw = fs.readFileSync(credPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    const creds = parsed.claudeAiOauth || parsed;
+    if (!creds.accessToken) return null;
+    return {
+      accessToken: creds.accessToken,
+      refreshToken: creds.refreshToken || "",
+      expiresAt: typeof creds.expiresAt === "number" ? creds.expiresAt : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function refreshOAuthToken(refreshToken: string): Promise<OAuthCredentials | null> {
+  try {
+    const clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+    const res = await fetch("https://platform.claude.com/v1/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: clientId,
+      }).toString(),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as Record<string, unknown>;
+    if (!data.access_token) return null;
+    const newCreds: OAuthCredentials = {
+      accessToken: String(data.access_token),
+      refreshToken: data.refresh_token ? String(data.refresh_token) : refreshToken,
+      expiresAt: data.expires_at
+        ? Number(data.expires_at) * 1000
+        : Date.now() + (Number(data.expires_in) || 3600) * 1000,
+    };
+    // Write refreshed credentials back
+    try {
+      const fs = require("fs");
+      const os = require("os");
+      const path = require("path");
+      const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
+      const existing = JSON.parse(fs.readFileSync(credPath, "utf-8"));
+      if (existing.claudeAiOauth) {
+        existing.claudeAiOauth.accessToken = newCreds.accessToken;
+        existing.claudeAiOauth.refreshToken = newCreds.refreshToken;
+        existing.claudeAiOauth.expiresAt = newCreds.expiresAt;
+      }
+      const tmpPath = credPath + ".tmp";
+      fs.writeFileSync(tmpPath, JSON.stringify(existing));
+      fs.renameSync(tmpPath, credPath);
+    } catch { /* skip writeback */ }
+    return newCreds;
+  } catch {
+    return null;
+  }
+}
+
+async function getValidOAuthCredentials(): Promise<OAuthCredentials | null> {
+  let creds = readLocalOAuthCredentials();
+  if (!creds) return null;
+  // Refresh if less than 5 minutes remaining
+  if (creds.expiresAt < Date.now() + 5 * 60 * 1000) {
+    if (!creds.refreshToken) return null;
+    const refreshed = await refreshOAuthToken(creds.refreshToken);
+    if (!refreshed) return null;
+    creds = refreshed;
+  }
+  return creds;
+}
+
+async function fetchOAuthProfile(accessToken: string): Promise<{ email: string; name: string } | null> {
+  try {
+    const res = await fetch("https://api.anthropic.com/api/oauth/profile", {
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as Record<string, unknown>;
+    const account = data.account as Record<string, unknown> | undefined;
+    const email = String(account?.email || "");
+    const name = String(account?.full_name || account?.display_name || "");
+    return email ? { email, name } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchClaudeUsageViaOAuth(accessToken: string): Promise<ProviderUsageInfo> {
+  try {
+    const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return { windows: [] };
+    const data = await res.json();
+    return parseClaudeUsageInfo([data]);
+  } catch {
+    return { windows: [] };
+  }
+}
+
+// ─── Claude cf_clearance refresh via Playwright ──────────────────
+
+async function refreshCfClearance(account: MonitorAccount): Promise<string | null> {
+  const cookieStr = account.sessionCookie || "";
+  if (!cookieStr) return null;
+
+  logger.info("[refreshCfClearance] Refreshing cf_clearance via browser", { accountId: account.id });
 
   try {
-    const result = await withBrowser(async (browser) => {
+    const { withBrowser } = await import("@/lib/usage-monitor/browser-pool");
+
+    return await withBrowser(async (browser) => {
+      const cookies = parseCookieString(cookieStr);
+
       const context = await browser.newContext({
         userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        locale: "en-US",
+        timezoneId: "America/New_York",
+        extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
       });
 
-      const cookies = parseCookieString(cookieStr);
-      if (cookies.length === 0) {
-        return emptyReport(account, "error", "Failed to parse cookies.");
-      }
-      await context.addCookies(cookies);
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      });
+
+      await context.addCookies(cookies.map(c => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain || ".claude.ai",
+        path: c.path || "/",
+        ...(c.secure ? { secure: true } : {}),
+      })));
 
       const page = await context.newPage();
+      await page.goto("https://claude.ai/", { waitUntil: "domcontentloaded", timeout: 30_000 });
 
-      // Minimal page load (domain establishment only — full rendering not needed)
-      await page.goto("https://claude.ai/settings", {
-        waitUntil: "domcontentloaded",
-        timeout: 15_000,
-      });
+      // Wait for Cloudflare challenge to resolve (poll every 5s, up to 3 times)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await page.waitForTimeout(5_000);
+        const pageCookies = await context.cookies("https://claude.ai");
+        if (pageCookies.some(c => c.name === "cf_clearance")) {
+          const claudeCookies = pageCookies.filter(c =>
+            c.domain === ".claude.ai" || c.domain === "claude.ai"
+          );
+          const newCookieStr = claudeCookies.map(c => `${c.name}=${c.value}`).join("; ");
+          await context.close();
 
-      // Check for login redirect
-      const currentUrl = page.url();
-      if (currentUrl.includes("/login") || currentUrl.includes("/oauth") || currentUrl.includes("/sso")) {
-        return emptyReport(account, "error", "Session cookie expired. Please login again.");
-      }
+          // Persist refreshed cookies to DB
+          const { updateMonitorAccount } = await import("@/lib/usage-monitor/store");
+          await updateMonitorAccount(account.id, { sessionCookie: newCookieStr });
 
-      // Parallel API calls from browser context (Cloudflare bypass)
-      const evalResult = await page.evaluate(async () => {
-        try {
-          const orgsRes = await fetch("/api/organizations");
-          if (!orgsRes.ok) return { error: `orgs ${orgsRes.status}` };
-          const orgs = await orgsRes.json() as Array<{ uuid: string; name?: string }>;
-          if (!Array.isArray(orgs) || orgs.length === 0) return { error: "no orgs" };
-
-          const orgUuid = orgs[0].uuid;
-
-          // Parallel calls for usage + billing
-          const [usageRes, billingRes] = await Promise.all([
-            fetch(`/api/organizations/${orgUuid}/usage`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
-            fetch(`/api/organizations/${orgUuid}/settings/billing`).then(async (r) => r.ok ? r.json() : null).catch(() => null),
-          ]);
-
-          return { results: [usageRes, billingRes].filter(Boolean) };
-        } catch (e) {
-          return { error: String(e) };
+          logger.info("[refreshCfClearance] Success", { accountId: account.id });
+          return newCookieStr;
         }
-      });
-
-      if (!evalResult || "error" in evalResult) {
-        const errMsg = evalResult && "error" in evalResult ? String(evalResult.error) : "Data fetch failed";
-        return emptyReport(account, "error", errMsg);
       }
 
-      const usageInfo = parseClaudeUsageInfo(evalResult.results || []);
+      await context.close();
+      logger.warn("[refreshCfClearance] cf_clearance not obtained after 15s", { accountId: account.id });
+      return null;
+    });
+  } catch (error) {
+    logger.error("[refreshCfClearance] Failed", { accountId: account.id, error: String(error) });
+    return null;
+  }
+}
 
-      return {
-        accountId: account.id,
-        name: account.name,
-        provider: account.provider,
-        status: "ok" as const,
-        costUsd: 0,
-        requests: 0,
-        tokens: 0,
-        points: [],
-        usageInfo,
-      };
+// ─── Claude Direct Fetch (session cookies + cf_clearance) ────────
+
+const CLAUDE_API_HEADERS = {
+  "Content-Type": "application/json",
+  "Accept": "application/json",
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://claude.ai/",
+  "Origin": "https://claude.ai",
+  "Sec-Fetch-Dest": "empty",
+  "Sec-Fetch-Mode": "cors",
+  "Sec-Fetch-Site": "same-origin",
+};
+
+async function fetchClaudeUsageDirect(account: MonitorAccount, allowCfRefresh = true): Promise<AccountUsageReport> {
+  const cookieStr = account.sessionCookie || "";
+  if (!cookieStr) return emptyReport(account, "not_configured", "Session cookie is empty.");
+
+  const headers = { ...CLAUDE_API_HEADERS, Cookie: cookieStr };
+
+  try {
+    // Step 1: Get organizations
+    const orgsRes = await fetch("https://claude.ai/api/organizations", {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
     });
 
-    if (result.status === "ok") {
-      setCached(cacheKey, result);
+    if (orgsRes.status === 403) {
+      if (allowCfRefresh) {
+        // cf_clearance may have expired — try to refresh via Playwright
+        const newCookieStr = await refreshCfClearance(account);
+        if (newCookieStr) {
+          return fetchClaudeUsageDirect({ ...account, sessionCookie: newCookieStr }, false);
+        }
+      }
+      return emptyReport(account, "error", "Session blocked by Cloudflare (403). Re-login needed.");
     }
-    return result;
+    if (orgsRes.status === 401) {
+      return emptyReport(account, "error", "Session cookie expired. Please login again.");
+    }
+    if (!orgsRes.ok) {
+      return emptyReport(account, "error", `Organizations API failed (HTTP ${orgsRes.status})`);
+    }
+
+    const orgs = (await orgsRes.json()) as Array<{ uuid: string }>;
+    if (!Array.isArray(orgs) || orgs.length === 0) {
+      return emptyReport(account, "error", "No organizations found.");
+    }
+
+    const orgId = orgs[0].uuid;
+    const dataList: unknown[] = [];
+
+    // Step 2: Fetch usage + subscription in parallel (different rate limit pools)
+    const [usageRes, subRes] = await Promise.all([
+      fetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
+        headers, cache: "no-store", signal: AbortSignal.timeout(15_000),
+      }),
+      fetch(`https://claude.ai/api/organizations/${orgId}/subscription_details`, {
+        headers, cache: "no-store", signal: AbortSignal.timeout(15_000),
+      }).catch(() => null),
+    ]);
+
+    if (usageRes.ok) {
+      try { dataList.push(await usageRes.json()); } catch { /* skip */ }
+    } else if (usageRes.status === 429) {
+      markRateLimited(`usage:${account.id}`);
+      logger.warn("[fetchClaudeUsageDirect] Usage API rate-limited, backing off 30min", { accountId: account.id });
+    } else {
+      logger.warn("[fetchClaudeUsageDirect] Usage API returned non-OK", {
+        accountId: account.id,
+        status: usageRes.status,
+      });
+    }
+
+    // Subscription details for billing info (plan type, next charge, etc.)
+    if (subRes?.ok) {
+      try { dataList.push(await subRes.json()); } catch { /* skip */ }
+    }
+
+    const usageInfo = parseClaudeUsageInfo(dataList);
+    return {
+      accountId: account.id,
+      name: account.name,
+      provider: account.provider,
+      status: "ok" as const,
+      costUsd: 0,
+      requests: 0,
+      tokens: 0,
+      points: [],
+      usageInfo,
+    };
   } catch (error) {
-    logger.error("[fetchClaudeUsage] Error fetching Claude usage", { error: String(error) });
-    return emptyReport(account, "error", "Failed to fetch Claude usage.");
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error("[fetchClaudeUsageDirect] Error", { accountId: account.id, error: msg });
+    return emptyReport(account, "error", `Failed to fetch Claude usage: ${msg}`);
   }
+}
+
+/** Fetch usage for all Claude accounts: OAuth → direct fetch → cached. */
+export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: ResolvedRange): Promise<AccountUsageReport[]> {
+  const results: AccountUsageReport[] = [];
+
+  // Separate cached vs uncached
+  const uncached: MonitorAccount[] = [];
+  for (const account of accounts) {
+    if (!account.sessionCookie) {
+      results.push(emptyReport(account, "not_configured", "Session cookie is empty."));
+      continue;
+    }
+    const cached = getCached<AccountUsageReport>(`usage:${account.id}`);
+    if (cached) {
+      results.push(cached);
+      continue;
+    }
+    uncached.push(account);
+  }
+
+  if (uncached.length === 0) return results;
+
+  // Phase 1: Try OAuth direct API for matching accounts
+  const oauthHandled = new Set<string>();
+  try {
+    const creds = await getValidOAuthCredentials();
+    if (creds) {
+      const profile = await fetchOAuthProfile(creds.accessToken);
+      if (profile) {
+        const profileEmail = profile.email.toLowerCase();
+        const matchedAccount = uncached.find(a => {
+          const name = a.name.toLowerCase();
+          return name === profileEmail || name.includes(profileEmail) || profileEmail.includes(name.split("@")[0]);
+        });
+        if (matchedAccount) {
+          logger.info("[fetchClaudeUsageBatch] Using OAuth API for account", { accountId: matchedAccount.id, email: profile.email });
+          const usageInfo = await fetchClaudeUsageViaOAuth(creds.accessToken);
+          if (usageInfo.windows.length > 0) {
+            const report: AccountUsageReport = {
+              accountId: matchedAccount.id,
+              name: matchedAccount.name,
+              provider: matchedAccount.provider,
+              status: "ok",
+              costUsd: 0,
+              requests: 0,
+              tokens: 0,
+              points: [],
+              usageInfo,
+            };
+            setCached(`usage:${matchedAccount.id}`, report);
+            results.push(report);
+            oauthHandled.add(matchedAccount.id);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    logger.warn("[fetchClaudeUsageBatch] OAuth attempt skipped", { error: String(error) });
+  }
+
+  // Phase 2: Direct fetch for remaining accounts (no browser needed!)
+  const remaining = uncached.filter(a => !oauthHandled.has(a.id));
+  for (let i = 0; i < remaining.length; i++) {
+    const account = remaining[i];
+    const cacheKey = `usage:${account.id}`;
+
+    // Skip if rate-limited — return stale data or a friendly message
+    if (isRateLimited(cacheKey)) {
+      const stale = getStale<AccountUsageReport>(cacheKey);
+      if (stale) {
+        logger.info("[fetchClaudeUsageBatch] Rate-limited, returning stale data", { accountId: account.id });
+        results.push(stale);
+      } else {
+        results.push(emptyReport(account, "error", "Rate limited by Claude. Will retry automatically in ~30 min."));
+      }
+      continue;
+    }
+
+    // Delay between accounts to respect rate limits
+    if (i > 0) await new Promise(r => setTimeout(r, 5_000));
+
+    try {
+      const report = await fetchClaudeUsageDirect(account);
+      if (report.status === "ok") setCached(cacheKey, report);
+      results.push(report);
+    } catch (error) {
+      logger.error("[fetchClaudeUsageBatch] Error for account", { accountId: account.id, error: String(error) });
+      results.push(emptyReport(account, "error", "Failed to fetch Claude usage."));
+    }
+  }
+
+  // Sort results to match original account order
+  return accounts.map(a => results.find(r => r.accountId === a.id) || emptyReport(a, "error", "Unknown error"));
 }
 
 interface ClaudeUtilizationRaw {
@@ -459,7 +755,9 @@ export async function fetchUsageForAccount(account: MonitorAccount, range: Resol
       }
       return await fetchOpenAIMetricsUsage(account);
     }
-    return await fetchClaudeUsage(account, range);
+    // Claude accounts with session cookies should go through batch path
+    const [report] = await fetchClaudeUsageBatch([account], range);
+    return report;
   } catch (error) {
     logger.error("[fetchUsageForAccount] Error fetching usage", { accountId: account.id, error: String(error) });
     return emptyReport(account, "error", "Error fetching usage data.");
