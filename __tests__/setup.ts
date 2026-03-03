@@ -15,6 +15,10 @@ export function resetDb(): void {
   `);
 }
 
+beforeAll(() => {
+  resetDb();
+});
+
 afterEach(() => {
   resetDb();
 });

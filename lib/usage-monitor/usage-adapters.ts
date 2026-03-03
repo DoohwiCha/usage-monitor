@@ -1,8 +1,12 @@
 import type { AccountUsageReport, ProviderUsageInfo, UtilizationWindow, MonitorAccount, ResolvedRange, UsagePoint } from "@/lib/usage-monitor/types";
 import { toUtcDayKey } from "@/lib/usage-monitor/range";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { getCached, setCached, getStale, isRateLimited, markRateLimited } from "@/lib/usage-monitor/usage-cache";
 import { logger } from "@/lib/usage-monitor/logger";
+import { getDb } from "@/lib/usage-monitor/db";
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -245,9 +249,6 @@ interface OAuthCredentials {
 
 function readLocalOAuthCredentials(): OAuthCredentials | null {
   try {
-    const fs = require("fs");
-    const os = require("os");
-    const path = require("path");
     const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
     const raw = fs.readFileSync(credPath, "utf-8");
     const parsed = JSON.parse(raw);
@@ -288,9 +289,6 @@ async function refreshOAuthToken(refreshToken: string): Promise<OAuthCredentials
     };
     // Write refreshed credentials back
     try {
-      const fs = require("fs");
-      const os = require("os");
-      const path = require("path");
       const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
       const existing = JSON.parse(fs.readFileSync(credPath, "utf-8"));
       if (existing.claudeAiOauth) {
@@ -529,7 +527,6 @@ async function fetchClaudeUsageDirect(account: MonitorAccount, allowCfRefresh = 
 
 function saveSnapshot(accountId: string, report: AccountUsageReport): void {
   try {
-    const { getDb } = require("@/lib/usage-monitor/db");
     const db = getDb();
     db.prepare(`
       INSERT INTO usage_snapshots (account_id, fetched_at, usage_json)
@@ -541,7 +538,6 @@ function saveSnapshot(accountId: string, report: AccountUsageReport): void {
 
 function loadSnapshot(account: MonitorAccount): AccountUsageReport | null {
   try {
-    const { getDb } = require("@/lib/usage-monitor/db");
     const db = getDb();
     const row = db.prepare("SELECT usage_json FROM usage_snapshots WHERE account_id = ?").get(account.id) as { usage_json: string } | undefined;
     if (!row) return null;
