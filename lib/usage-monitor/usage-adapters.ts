@@ -626,12 +626,19 @@ export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: 
 
     try {
       const report = await fetchClaudeUsageDirect(account);
-      if (report.status === "ok") {
+      const hasWindows = (report.usageInfo?.windows?.length ?? 0) > 0;
+      if (report.status === "ok" && hasWindows) {
+        // Only cache/persist when we actually got usage data
         const jitter = Math.floor(Math.random() * 5 * 60 * 1000);
         setCached(`usage:${account.id}`, report, 10 * 60 * 1000 + jitter);
         saveSnapshot(account.id, report);
+        results.set(account.id, report);
+      } else if (report.status === "ok" && !hasWindows) {
+        // Got OK but no windows (likely 429 on /usage) — keep existing data
+        logger.info("[fetchClaudeUsageBatch] No windows returned, keeping existing data", { accountId: account.id });
+      } else {
+        results.set(account.id, report);
       }
-      results.set(account.id, report);
     } catch (error) {
       logger.error("[fetchClaudeUsageBatch] Fetch error", { accountId: account.id, error: String(error) });
     }
