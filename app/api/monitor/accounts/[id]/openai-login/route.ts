@@ -79,12 +79,21 @@ export async function POST(request: Request, context: RouteContext) {
       headless: false,
       args: [
         "--disable-gpu",
-        "--disable-software-rasterizer",
-        "--enable-unsafe-swiftshader",
+        "--disable-gpu-compositing",
+        "--use-gl=swiftshader",
         "--no-sandbox",
+        "--ozone-platform=x11",
+        "--disable-blink-features=AutomationControlled",
       ],
     });
-    const browserContext = await browser.newContext();
+    const browserContext = await browser.newContext({
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      locale: "en-US",
+      timezoneId: "America/New_York",
+    });
+    await browserContext.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    });
     const page = await browserContext.newPage();
 
     // Navigate directly to login page
