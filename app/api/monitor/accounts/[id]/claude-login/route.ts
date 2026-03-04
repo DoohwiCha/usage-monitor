@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
 import { acquireBrowserSlot, releaseBrowserSlot, BrowserPoolExhaustedError } from "@/lib/usage-monitor/browser-pool";
@@ -64,9 +66,12 @@ export async function POST(request: Request, context: RouteContext) {
     throw err;
   }
 
-  let browser;
+  let browserContext: Awaited<ReturnType<typeof playwright.chromium.launchPersistentContext>> | undefined;
   try {
-    browser = await playwright.chromium.launch({
+    const profileDir = join(process.cwd(), "data", "browser-profiles", `claude-${id}`);
+    mkdirSync(profileDir, { recursive: true });
+
+    browserContext = await playwright.chromium.launchPersistentContext(profileDir, {
       headless: false,
       args: [
         "--disable-blink-features=AutomationControlled",
@@ -76,8 +81,6 @@ export async function POST(request: Request, context: RouteContext) {
         "--no-sandbox",
         "--ozone-platform=x11",
       ],
-    });
-    const browserContext = await browser.newContext({
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
       locale: "en-US",
       timezoneId: "America/New_York",
@@ -89,7 +92,7 @@ export async function POST(request: Request, context: RouteContext) {
         get: () => undefined,
       });
     });
-    const page = await browserContext.newPage();
+    const page = browserContext.pages()[0] || await browserContext.newPage();
 
     await page.goto("https://claude.ai/login", { waitUntil: "domcontentloaded", timeout: 30_000 });
 
@@ -208,14 +211,36 @@ export async function POST(request: Request, context: RouteContext) {
       displayName = emailMatch ? emailMatch[1] : orgName;
     }
 
-    // Save cookies + name to account
-    const updated = await updateMonitorAccount(id, { sessionCookie: cookieString, name: displayName || account.name, enabled: true });
+    // Save cookies + name + orgId to account
+    const orgId = verifyResult.orgs[0].uuid;
+    const updated = await updateMonitorAccount(id, {
+      sessionCookie: cookieString,
+      name: displayName || account.name,
+      organizationId: orgId,
+      enabled: true,
+    });
     const refreshed = updated.accounts.find((a) => a.id === id);
     auditLog("claude_session_extracted", { resourceType: "account", resourceId: id, details: displayName || account.name });
+
+    // Check for duplicate org: another account already using the same org UUID
+    let warning: string | undefined;
+    const duplicate = updated.accounts.find(
+      (a) => a.id !== id && a.organizationId === orgId,
+    );
+    if (duplicate) {
+      warning = `Warning: This session resolves to the same Claude organization as "${duplicate.name}". Usage data will be identical. Please re-login with the correct account.`;
+      logger.warn("[claude-login] Duplicate organization detected", {
+        accountId: id,
+        duplicateAccountId: duplicate.id,
+        duplicateName: duplicate.name,
+        orgId,
+      });
+    }
 
     return secureJson({
       ok: true,
       message: `Login successful — ${displayName || account.name}`,
+      ...(warning ? { warning } : {}),
       account: refreshed ? toPublicAccount(refreshed) : undefined,
     });
   } catch (error) {
@@ -231,8 +256,8 @@ export async function POST(request: Request, context: RouteContext) {
 
     return secureJson({ ok: false, error: "Error during Claude login." }, { status: 500 });
   } finally {
-    if (browser) {
-      await browser.close().catch(() => {});
+    if (browserContext) {
+      await browserContext.close().catch(() => {});
     }
     releaseBrowserSlot();
   }

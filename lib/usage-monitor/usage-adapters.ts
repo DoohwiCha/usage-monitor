@@ -247,6 +247,17 @@ interface OAuthCredentials {
   expiresAt: number;
 }
 
+export function matchClaudeOAuthAccount(
+  eligibleAccounts: MonitorAccount[],
+  profileEmailRaw: string,
+): MonitorAccount | undefined {
+  const profileEmail = profileEmailRaw.trim().toLowerCase();
+  if (!profileEmail || !profileEmail.includes("@")) {
+    return undefined;
+  }
+  return eligibleAccounts.find((account) => account.name.trim().toLowerCase() === profileEmail);
+}
+
 function readLocalOAuthCredentials(): OAuthCredentials | null {
   try {
     const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
@@ -475,6 +486,22 @@ async function fetchClaudeUsageDirect(account: MonitorAccount, allowCfRefresh = 
     }
 
     const orgId = orgs[0].uuid;
+
+    // Persist orgId if not yet stored, and detect duplicate orgs across accounts
+    if (!account.organizationId || account.organizationId !== orgId) {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE accounts SET organization_id = ?, updated_at = datetime('now') WHERE id = ?").run(orgId, account.id);
+        const dup = db.prepare("SELECT id, name FROM accounts WHERE organization_id = ? AND id != ?").get(orgId, account.id) as { id: string; name: string } | undefined;
+        if (dup) {
+          logger.warn("[fetchClaudeUsageDirect] Duplicate org detected — usage will be identical", {
+            accountId: account.id, accountName: account.name,
+            duplicateId: dup.id, duplicateName: dup.name, orgId,
+          });
+        }
+      } catch { /* best-effort */ }
+    }
+
     const dataList: unknown[] = [];
 
     // Step 2: Fetch usage + subscription in parallel (different rate limit pools)
@@ -587,11 +614,7 @@ export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: 
     if (creds) {
       const profile = await fetchOAuthProfile(creds.accessToken);
       if (profile) {
-        const profileEmail = profile.email.toLowerCase();
-        const matchedAccount = eligible.find(a => {
-          const name = a.name.toLowerCase();
-          return name === profileEmail || name.includes(profileEmail) || profileEmail.includes(name.split("@")[0]);
-        });
+        const matchedAccount = matchClaudeOAuthAccount(eligible, profile.email);
         if (matchedAccount) {
           const usageInfo = await fetchClaudeUsageViaOAuth(creds.accessToken);
           if (usageInfo.windows.length > 0) {

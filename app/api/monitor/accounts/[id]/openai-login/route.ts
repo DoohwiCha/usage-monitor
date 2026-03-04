@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
 import type { SubscriptionInfo } from "@/lib/usage-monitor/types";
@@ -73,9 +75,12 @@ export async function POST(request: Request, context: RouteContext) {
     throw err;
   }
 
-  let browser;
+  let browserContext: Awaited<ReturnType<typeof playwright.chromium.launchPersistentContext>> | undefined;
   try {
-    browser = await playwright.chromium.launch({
+    const profileDir = join(process.cwd(), "data", "browser-profiles", `openai-${id}`);
+    mkdirSync(profileDir, { recursive: true });
+
+    browserContext = await playwright.chromium.launchPersistentContext(profileDir, {
       headless: false,
       args: [
         "--disable-gpu",
@@ -85,8 +90,6 @@ export async function POST(request: Request, context: RouteContext) {
         "--ozone-platform=x11",
         "--disable-blink-features=AutomationControlled",
       ],
-    });
-    const browserContext = await browser.newContext({
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       locale: "en-US",
       timezoneId: "America/New_York",
@@ -94,7 +97,7 @@ export async function POST(request: Request, context: RouteContext) {
     await browserContext.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     });
-    const page = await browserContext.newPage();
+    const page = browserContext.pages()[0] || await browserContext.newPage();
 
     // Navigate directly to login page
     await page.goto("https://chatgpt.com/auth/login", { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -156,8 +159,7 @@ export async function POST(request: Request, context: RouteContext) {
     const filteredCookies = allCookies.filter((c) => AUTH_COOKIE_NAMES.has(c.name));
     const cookieString = JSON.stringify(filteredCookies);
 
-    await browser.close();
-    browser = undefined;
+    // Context stays open until finally block — persistent profile is saved on close
 
     if (!cookieString || cookieString === "[]") {
       return secureJson({ ok: false, error: "Failed to extract cookies." }, { status: 502 });
@@ -199,8 +201,8 @@ export async function POST(request: Request, context: RouteContext) {
 
     return secureJson({ ok: false, error: "Error during OpenAI login." }, { status: 500 });
   } finally {
-    if (browser) {
-      await browser.close().catch(() => {});
+    if (browserContext) {
+      await browserContext.close().catch(() => {});
     }
     releaseBrowserSlot();
   }
