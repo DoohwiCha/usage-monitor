@@ -98,6 +98,7 @@ interface AccountRow {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
 }
 
 function rowToAccount(row: AccountRow): MonitorAccount {
@@ -136,7 +137,7 @@ export function toPublicAccount(account: MonitorAccount): PublicMonitorAccount {
 
 export async function readMonitorConfig(): Promise<MonitorConfig> {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM accounts ORDER BY sort_order ASC, created_at ASC").all() as AccountRow[];
+  const rows = db.prepare("SELECT * FROM accounts WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC").all() as AccountRow[];
   const accounts = rows.slice(0, MAX_ACCOUNTS).map(rowToAccount);
 
   return {
@@ -156,7 +157,7 @@ export async function addMonitorAccount(input: Partial<MonitorAccount>): Promise
   validateAccountInput(input);
 
   const db = getDb();
-  const count = (db.prepare("SELECT COUNT(*) as cnt FROM accounts").get() as { cnt: number }).cnt;
+  const count = (db.prepare("SELECT COUNT(*) as cnt FROM accounts WHERE deleted_at IS NULL").get() as { cnt: number }).cnt;
   if (count >= MAX_ACCOUNTS) {
     throw new Error(`Maximum ${MAX_ACCOUNTS} accounts allowed.`);
   }
@@ -185,6 +186,10 @@ export async function addMonitorAccount(input: Partial<MonitorAccount>): Promise
   });
   insertAccount();
 
+  db.prepare(
+    "INSERT INTO audit_log (timestamp, action, resource_type, resource_id, details) VALUES (?, ?, ?, ?, ?)"
+  ).run(stamp, "account_created", "account", id, `${input.name?.trim() || `Account ${count + 1}`} (${input.provider || "claude"})`);
+
   return readMonitorConfig();
 }
 
@@ -192,7 +197,7 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
   validateAccountInput(updates);
 
   const db = getDb();
-  const existing = db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRow | undefined;
+  const existing = db.prepare("SELECT * FROM accounts WHERE id = ? AND deleted_at IS NULL").get(id) as AccountRow | undefined;
   if (!existing) {
     throw new Error("Account not found.");
   }
@@ -246,7 +251,7 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
 
 export async function reorderMonitorAccounts(orderedIds: string[]): Promise<MonitorConfig> {
   const db = getDb();
-  const currentIds = (db.prepare("SELECT id FROM accounts ORDER BY sort_order ASC, created_at ASC").all() as Array<{ id: string }>).map((r) => r.id);
+  const currentIds = (db.prepare("SELECT id FROM accounts WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC").all() as Array<{ id: string }>).map((r) => r.id);
   if (orderedIds.length !== currentIds.length) {
     throw new Error("orderedIds must include every account exactly once.");
   }
@@ -270,10 +275,44 @@ export async function reorderMonitorAccounts(orderedIds: string[]): Promise<Moni
 
 export async function deleteMonitorAccount(id: string): Promise<MonitorConfig> {
   const db = getDb();
-  const result = db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
-  if (result.changes === 0) {
+  const existing = db.prepare("SELECT id, name, provider FROM accounts WHERE id = ? AND deleted_at IS NULL").get(id) as { id: string; name: string; provider: string } | undefined;
+  if (!existing) {
     throw new Error("Account not found.");
   }
 
+  const stamp = nowIso();
+  const softDelete = db.transaction(() => {
+    db.prepare("UPDATE accounts SET deleted_at = ?, updated_at = ? WHERE id = ?").run(stamp, stamp, id);
+    db.prepare(
+      "INSERT INTO audit_log (timestamp, action, resource_type, resource_id, details) VALUES (?, ?, ?, ?, ?)"
+    ).run(stamp, "account_deleted", "account", id, `${existing.name} (${existing.provider})`);
+  });
+  softDelete();
+
   return readMonitorConfig();
+}
+
+export async function restoreMonitorAccount(id: string): Promise<MonitorConfig> {
+  const db = getDb();
+  const existing = db.prepare("SELECT id, name, provider FROM accounts WHERE id = ? AND deleted_at IS NOT NULL").get(id) as { id: string; name: string; provider: string } | undefined;
+  if (!existing) {
+    throw new Error("No deleted account found with this ID.");
+  }
+
+  const stamp = nowIso();
+  const restore = db.transaction(() => {
+    db.prepare("UPDATE accounts SET deleted_at = NULL, updated_at = ? WHERE id = ?").run(stamp, id);
+    db.prepare(
+      "INSERT INTO audit_log (timestamp, action, resource_type, resource_id, details) VALUES (?, ?, ?, ?, ?)"
+    ).run(stamp, "account_restored", "account", id, `${existing.name} (${existing.provider})`);
+  });
+  restore();
+
+  return readMonitorConfig();
+}
+
+export async function listDeletedAccounts(): Promise<PublicMonitorAccount[]> {
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM accounts WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC").all() as AccountRow[];
+  return rows.map((r) => toPublicAccount(rowToAccount(r)));
 }

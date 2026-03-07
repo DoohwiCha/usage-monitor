@@ -280,7 +280,7 @@ function AccountCard({ account }: { account: AccountUsageReport }) {
             const pct = Math.min(Math.round(win.utilization), 100);
             return <UtilizationBar key={win.label} pct={pct} label={win.label} />;
           })
-        ) : account.provider === "openai" && (account.costUsd > 0 || account.requests > 0) ? (
+        ) : account.provider === "openai" && (account.costUsd > 0 || account.requests > 0 || account.tokens > 0) ? (
           <div className="flex gap-3 text-sm">
             <span className="text-[var(--text-muted)]">{t("cost")} <strong className="text-[var(--text-body)]">${account.costUsd.toFixed(2)}</strong></span>
             <span className="text-[var(--text-muted)]">{t("requests")} <strong className="text-[var(--text-body)]">{account.requests.toLocaleString()}</strong></span>
@@ -322,6 +322,7 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
   const openaiWindowMap = buildWindowMap(openaiAccounts);
   const openaiTotalCost = openaiAccounts.reduce((s, a) => s + a.costUsd, 0);
   const openaiTotalRequests = openaiAccounts.reduce((s, a) => s + a.requests, 0);
+  const openaiTotalTokens = openaiAccounts.reduce((s, a) => s + a.tokens, 0);
 
   if (claudeAccounts.length === 0 && openaiAccounts.length === 0) return null;
 
@@ -358,10 +359,11 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
                 return <UtilizationBar key={label} pct={avg} label={label} />;
               })}
             </div>
-          ) : (openaiTotalCost > 0 || openaiTotalRequests > 0) ? (
+          ) : (openaiTotalCost > 0 || openaiTotalRequests > 0 || openaiTotalTokens > 0) ? (
             <div className="flex gap-4 text-sm">
               <span className="text-[var(--text-muted)]">{t("cost")} <strong className="text-[var(--text-body)]">${openaiTotalCost.toFixed(2)}</strong></span>
               <span className="text-[var(--text-muted)]">{t("requests")} <strong className="text-[var(--text-body)]">{openaiTotalRequests.toLocaleString()}</strong></span>
+              <span className="text-[var(--text-muted)]">{t("tokens")} <strong className="text-[var(--text-body)]">{openaiTotalTokens.toLocaleString()}</strong></span>
             </div>
           ) : <p className="text-sm text-[var(--text-dim)]">{t("noData")}</p>}
         </div>

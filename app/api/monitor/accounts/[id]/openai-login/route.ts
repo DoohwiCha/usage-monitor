@@ -37,8 +37,8 @@ export async function POST(request: Request, context: RouteContext) {
     if (isEncryptionKeyMismatchError(error)) {
       return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
     }
-    const message = error instanceof Error ? error.message : "Failed to read account configuration.";
-    return secureJson({ ok: false, error: message }, { status: 500 });
+    logger.error("[openai-login] Failed to read account configuration", { accountId: id, error: String(error) });
+    return secureJson({ ok: false, error: "Failed to read account configuration." }, { status: 500 });
   }
   if (!account) {
     return secureJson({ ok: false, error: "Account not found." }, { status: 404 });
@@ -51,8 +51,8 @@ export async function POST(request: Request, context: RouteContext) {
       if (isEncryptionKeyMismatchError(error)) {
         return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
       }
-      const message = error instanceof Error ? error.message : "Failed to update account provider.";
-      return secureJson({ ok: false, error: message }, { status: 500 });
+      logger.error("[openai-login] Failed to update account provider", { accountId: id, error: String(error) });
+      return secureJson({ ok: false, error: "Failed to update account provider." }, { status: 500 });
     }
   }
 
@@ -86,7 +86,6 @@ export async function POST(request: Request, context: RouteContext) {
         "--disable-gpu",
         "--disable-gpu-compositing",
         "--use-gl=swiftshader",
-        "--no-sandbox",
         "--ozone-platform=x11",
         "--disable-blink-features=AutomationControlled",
       ],

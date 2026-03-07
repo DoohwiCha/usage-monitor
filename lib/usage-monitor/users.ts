@@ -46,15 +46,21 @@ async function hashPassword(password: string): Promise<string> {
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [saltHex, hashHex] = stored.split(":");
   if (!saltHex || !hashHex) return false;
+  if (saltHex.length % 2 !== 0 || hashHex.length % 2 !== 0) return false;
 
-  const salt = Buffer.from(saltHex, "hex");
-  const expectedHash = Buffer.from(hashHex, "hex");
+  try {
+    const salt = Buffer.from(saltHex, "hex");
+    const expectedHash = Buffer.from(hashHex, "hex");
+    if (salt.length === 0 || expectedHash.length !== 64) return false;
 
-  const derived = await new Promise<Buffer>((resolve, reject) => {
-    scrypt(password, salt, 64, (err, key) => (err ? reject(err) : resolve(key)));
-  });
+    const derived = await new Promise<Buffer>((resolve, reject) => {
+      scrypt(password, salt, 64, (err, key) => (err ? reject(err) : resolve(key)));
+    });
 
-  return timingSafeEqual(derived, expectedHash);
+    return timingSafeEqual(derived, expectedHash);
+  } catch {
+    return false;
+  }
 }
 
 // --- User CRUD ---
@@ -86,8 +92,8 @@ export async function createUser(username: string, password: string, role: UserR
   if (!username || username.length < 2 || username.length > 50) {
     throw new Error("Username must be 2-50 characters.");
   }
-  if (!password || password.length < 8) {
-    throw new Error("Password must be at least 8 characters.");
+  if (!password || password.length < 4) {
+    throw new Error("Password must be at least 4 characters.");
   }
   if (!/^[a-zA-Z0-9._-]+$/.test(username)) {
     throw new Error("Username can only contain letters, numbers, dots, hyphens, and underscores.");

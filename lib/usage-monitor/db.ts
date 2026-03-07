@@ -15,6 +15,7 @@ export function getDb(): Database.Database {
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
   _db.pragma("busy_timeout = 5000");
+  _db.pragma("wal_autocheckpoint = 100");
 
   runMigrations(_db);
   return _db;
@@ -116,6 +117,12 @@ function runMigrations(db: Database.Database): void {
           fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
           usage_json TEXT NOT NULL
         );
+      `);
+    },
+    // v7: soft-delete — add deleted_at column to accounts for data protection
+    (db) => {
+      db.exec(`
+        ALTER TABLE accounts ADD COLUMN deleted_at TEXT DEFAULT NULL;
       `);
     },
   ];

@@ -165,6 +165,13 @@ async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<Account
   const fs = await import("fs/promises");
   const path = await import("path");
   const metricsPath = path.join(process.env.HOME || "/root", ".omx", "metrics.json");
+  const billing = account.subscriptionInfo?.plan
+    ? {
+        status: account.subscriptionInfo.plan,
+        nextChargeDate: account.subscriptionInfo.renewsAt || null,
+        interval: account.subscriptionInfo.billingPeriod || null,
+      }
+    : undefined;
 
   try {
     const raw = await fs.readFile(metricsPath, "utf-8");
@@ -191,23 +198,21 @@ async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<Account
       });
     }
 
-    // Subscription info saved during login
-    let billing: ProviderUsageInfo["billing"] | undefined;
-    if (account.subscriptionInfo?.plan) {
-      billing = {
-        status: account.subscriptionInfo.plan,
-        nextChargeDate: account.subscriptionInfo.renewsAt || null,
-        interval: account.subscriptionInfo.billingPeriod || null,
-      };
+    if (windows.length === 0 && !billing) {
+      return emptyReport(account, "not_configured", "OpenAI usage metrics are not available.");
     }
-
     const report = emptyReport(account, "ok");
     if (windows.length > 0 || billing) {
       report.usageInfo = { windows, billing };
     }
     return report;
   } catch {
-    return emptyReport(account, "not_configured", "oh-my-codex metrics not found (~/.omx/metrics.json)");
+    if (!billing) {
+      return emptyReport(account, "not_configured", "oh-my-codex metrics not found (~/.omx/metrics.json)");
+    }
+    const report = emptyReport(account, "ok");
+    report.usageInfo = { windows: [], billing };
+    return report;
   }
 }
 
@@ -577,6 +582,7 @@ function loadSnapshot(account: MonitorAccount): AccountUsageReport | null {
 // ─── Rotating queue: fetch 1 account per cycle ───────────────────
 
 let claudeQueueIndex = 0;
+const CLAUDE_INITIAL_FETCH_PENDING_ERROR = "Usage data is being fetched. Please refresh shortly.";
 
 /** Fetch usage for all Claude accounts: rotating queue (1 per cycle), with persistent snapshots. */
 export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: ResolvedRange): Promise<AccountUsageReport[]> {
@@ -593,7 +599,8 @@ export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: 
     if (stale) { results.set(account.id, stale); continue; }
     const snapshot = loadSnapshot(account);
     if (snapshot) { results.set(account.id, snapshot); continue; }
-    results.set(account.id, emptyReport(account, "ok"));
+    // No cached/stale/snapshot data yet: report a truthful pending state instead of synthetic "ok".
+    results.set(account.id, emptyReport(account, "error", CLAUDE_INITIAL_FETCH_PENDING_ERROR));
   }
 
   // Step 2: Find accounts eligible for a fresh fetch (not cached, not rate-limited)

@@ -7,6 +7,7 @@ import {
   getUserCount,
   getUserByUsername,
 } from "@/lib/usage-monitor/users";
+import { getDb } from "@/lib/usage-monitor/db";
 import { resetDb } from "./setup";
 
 describe("createUser", () => {
@@ -23,8 +24,8 @@ describe("createUser", () => {
     await expect(createUser("ALICE", "password456")).rejects.toThrow("Username already exists.");
   });
 
-  it("rejects short passwords (<8 chars)", async () => {
-    await expect(createUser("bob", "short")).rejects.toThrow("Password must be at least 8 characters.");
+  it("rejects short passwords (<4 chars)", async () => {
+    await expect(createUser("bob", "abc")).rejects.toThrow("Password must be at least 4 characters.");
   });
 
   it("rejects invalid username characters", async () => {
@@ -67,6 +68,13 @@ describe("authenticateUser", () => {
     const user = await authenticateUser("ALICE", "password123");
     expect(user).not.toBeNull();
     expect(user!.username).toBe("alice");
+  });
+
+  it("returns null for malformed stored hash without throwing", async () => {
+    await createUser("alice", "password123");
+    const db = getDb();
+    db.prepare("UPDATE users SET password_hash = ? WHERE username = ?").run("bad:hash", "alice");
+    await expect(authenticateUser("alice", "password123")).resolves.toBeNull();
   });
 });
 

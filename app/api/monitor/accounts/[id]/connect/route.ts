@@ -2,6 +2,7 @@ import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
 import { testConnection } from "@/lib/usage-monitor/usage-adapters";
 import { secureJson } from "@/lib/usage-monitor/response";
+import { logger } from "@/lib/usage-monitor/logger";
 
 export const runtime = "nodejs";
 
@@ -23,8 +24,8 @@ export async function POST(request: Request, context: RouteContext) {
     if (isEncryptionKeyMismatchError(error)) {
       return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
     }
-    const message = error instanceof Error ? error.message : "Failed to read account configuration.";
-    return secureJson({ ok: false, error: message }, { status: 500 });
+    logger.error("[accounts:connect] failed to read account configuration", { accountId: id, error: String(error) });
+    return secureJson({ ok: false, error: "Failed to read account configuration." }, { status: 500 });
   }
   if (!account) {
     return secureJson({ ok: false, error: "Account not found." }, { status: 404 });

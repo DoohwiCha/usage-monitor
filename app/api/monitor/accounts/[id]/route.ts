@@ -2,11 +2,19 @@ import { deleteMonitorAccount, ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMis
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import type { ProviderType } from "@/lib/usage-monitor/types";
 import { secureJson } from "@/lib/usage-monitor/response";
+import { logger } from "@/lib/usage-monitor/logger";
 
 export const runtime = "nodejs";
 
 type RouteContext = { params: Promise<{ id: string }> };
 const PROVIDERS: ProviderType[] = ["claude", "openai"];
+const CLIENT_UPDATE_ACCOUNT_ERRORS = new Set([
+  "Account name must be 200 characters or less.",
+  "Session cookie must be 20,000 characters or less.",
+  "API key must be 500 characters or less.",
+  "Organization ID must be 500 characters or less.",
+  "MONITOR_ENCRYPTION_KEY must be set.",
+]);
 
 function parseBooleanInput(value: unknown): boolean {
   if (typeof value === "boolean") return value;
@@ -31,8 +39,8 @@ export async function GET(_: Request, context: RouteContext) {
     if (isEncryptionKeyMismatchError(error)) {
       return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
     }
-    const message = error instanceof Error ? error.message : "Failed to read account configuration.";
-    return secureJson({ ok: false, error: message }, { status: 500 });
+    logger.error("[accounts:id:get] failed to read account configuration", { accountId: id, error: String(error) });
+    return secureJson({ ok: false, error: "Failed to read account configuration." }, { status: 500 });
   }
 
   if (!account) {
@@ -87,7 +95,11 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (isEncryptionKeyMismatchError(error)) {
       return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
     }
-    return secureJson({ ok: false, error: message }, { status: 400 });
+    if (CLIENT_UPDATE_ACCOUNT_ERRORS.has(message)) {
+      return secureJson({ ok: false, error: message }, { status: 400 });
+    }
+    logger.error("[accounts:id:patch] failed to update account", { accountId: id, error: String(error) });
+    return secureJson({ ok: false, error: "Error updating account." }, { status: 500 });
   }
 }
 
@@ -111,6 +123,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (isEncryptionKeyMismatchError(error)) {
       return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
     }
-    return secureJson({ ok: false, error: message }, { status: 400 });
+    logger.error("[accounts:id:delete] failed to delete account", { accountId: id, error: String(error) });
+    return secureJson({ ok: false, error: "Error deleting account." }, { status: 500 });
   }
 }

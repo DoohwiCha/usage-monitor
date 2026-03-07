@@ -49,7 +49,6 @@ export async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Prom
         "--disable-gpu",
         "--disable-gpu-compositing",
         "--use-gl=swiftshader",
-        "--no-sandbox",
         "--ozone-platform=x11",
         "--disable-blink-features=AutomationControlled",
       ],

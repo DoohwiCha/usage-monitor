@@ -4,6 +4,7 @@ import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonito
 import { fetchUsageForAccount, fetchClaudeUsageBatch } from "@/lib/usage-monitor/usage-adapters";
 import type { UsageOverviewResponse } from "@/lib/usage-monitor/types";
 import { secureJson } from "@/lib/usage-monitor/response";
+import { logger } from "@/lib/usage-monitor/logger";
 
 export const runtime = "nodejs";
 
@@ -13,7 +14,11 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const accountId = searchParams.get("accountId");
-  const range = resolveRange(searchParams.get("range"));
+  const rangeParam = searchParams.get("range");
+  if (rangeParam && !["day", "week", "month"].includes(rangeParam)) {
+    return secureJson({ ok: false, error: "Invalid range. Use day, week, or month." }, { status: 400 });
+  }
+  const range = resolveRange(rangeParam);
 
   try {
     const config = await readMonitorConfig();
@@ -64,7 +69,7 @@ export async function GET(request: Request) {
     if (isEncryptionKeyMismatchError(error)) {
       return secureJson({ ok: false, error: ENCRYPTION_KEY_MISMATCH_ERROR }, { status: 500 });
     }
-    const message = error instanceof Error ? error.message : "Failed to fetch usage data.";
-    return secureJson({ ok: false, error: message }, { status: 500 });
+    logger.error("[usage:get] failed to fetch usage data", { accountId: accountId || undefined, error: String(error) });
+    return secureJson({ ok: false, error: "Failed to fetch usage data." }, { status: 500 });
   }
 }

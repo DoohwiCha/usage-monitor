@@ -27,17 +27,37 @@ export default function AccountDetail({ id }: { id: string }) {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [aRes, uRes] = await Promise.all([
+      const [accountResult, usageResult] = await Promise.allSettled([
         fetch(`/api/monitor/accounts/${id}`, { cache: "no-store" }),
         fetch(`/api/monitor/usage?accountId=${id}&range=month`, { cache: "no-store" }),
       ]);
+
+      if (accountResult.status === "rejected") {
+        setError("detail.loadAccountError");
+        return;
+      }
+
+      const aRes = accountResult.value;
       const aJson = (await aRes.json()) as { ok: boolean; account?: PublicMonitorAccount; error?: string };
-      const uJson = (await uRes.json()) as { ok: boolean; accounts?: AccountUsageReport[]; error?: string };
-      if (!aRes.ok || !aJson.ok || !aJson.account) { setError(aJson.error || "detail.loadAccountError"); setLoading(false); return; }
-      if (!uRes.ok || !uJson.ok || !uJson.accounts?.[0]) { setError(uJson.error || "detail.loadUsageError"); setLoading(false); return; }
+      if (!aRes.ok || !aJson.ok || !aJson.account) {
+        setError(aJson.error || "detail.loadAccountError");
+        return;
+      }
+
       setAccount(aJson.account);
       setForm({ name: aJson.account.name, provider: aJson.account.provider, enabled: aJson.account.enabled, sessionCookie: "", apiKey: "", organizationId: aJson.account.organizationId || "" });
-      setReport(uJson.accounts[0]);
+
+      if (usageResult.status === "fulfilled") {
+        const uRes = usageResult.value;
+        const uJson = (await uRes.json()) as { ok: boolean; accounts?: AccountUsageReport[]; error?: string };
+        if (uRes.ok && uJson.ok && uJson.accounts?.[0]) {
+          setReport(uJson.accounts[0]);
+        } else {
+          setError(uJson.error || "detail.loadUsageError");
+        }
+      } else {
+        setError("detail.loadUsageError");
+      }
     } catch { setError("detail.apiCallError"); } finally { setLoading(false); }
   }, [id]);
 
@@ -263,7 +283,7 @@ export default function AccountDetail({ id }: { id: string }) {
               </div>
             )}
 
-            {report.provider === "openai" && (report.costUsd > 0 || report.requests > 0) && (
+            {report.provider === "openai" && (report.costUsd > 0 || report.requests > 0 || report.tokens > 0) && (
               <>
                 <div className="grid grid-cols-3 gap-2">
                   {([[t("cost"), `$${report.costUsd.toFixed(2)}`], [t("requests"), report.requests.toLocaleString()], [t("tokens"), report.tokens.toLocaleString()]] as [string, string][]).map(([l, v]) => (
