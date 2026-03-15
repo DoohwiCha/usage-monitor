@@ -14,7 +14,7 @@ export async function PATCH(request: Request) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAdmin();
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   let body: Record<string, unknown>;

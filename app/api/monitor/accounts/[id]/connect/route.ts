@@ -12,7 +12,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAdmin();
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   const { id } = await context.params;

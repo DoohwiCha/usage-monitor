@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   createUser,
   authenticateUser,
@@ -8,7 +8,6 @@ import {
   getUserByUsername,
 } from "@/lib/usage-monitor/users";
 import { getDb } from "@/lib/usage-monitor/db";
-import { resetDb } from "./setup";
 
 describe("createUser", () => {
   it("creates a user successfully", async () => {

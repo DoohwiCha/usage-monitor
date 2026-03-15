@@ -148,7 +148,8 @@ export async function readMonitorConfig(): Promise<MonitorConfig> {
   };
 }
 
-export async function writeMonitorConfig(_config: MonitorConfig): Promise<void> {
+export async function writeMonitorConfig(config: MonitorConfig): Promise<void> {
+  void config;
   // No-op: individual mutations handle their own writes via SQLite transactions.
   // This function is kept for backward compatibility with any callers.
 }

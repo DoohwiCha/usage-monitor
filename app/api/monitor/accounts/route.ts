@@ -27,8 +27,8 @@ function parseBooleanInput(value: unknown, fallback = false): boolean {
   return Boolean(value);
 }
 
-export async function GET() {
-  const auth = await ensureApiAdmin();
+export async function GET(request: Request) {
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   try {
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAdmin();
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   let body: Record<string, unknown>;

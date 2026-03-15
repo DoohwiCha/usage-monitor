@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import type { AccountUsageReport, UsageOverviewResponse } from "@/lib/usage-monitor/types";
+import type { AccountUsageReport, UsageOverviewResponse, CodexMetrics } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
 import { type TranslationKey } from "@/lib/i18n/translations";
@@ -28,21 +28,28 @@ function utilizationBarGradient(pct: number): string {
   return "from-emerald-400 to-emerald-500";
 }
 
-function UtilizationBar({ pct, label }: { pct: number; label: string }) {
+function UtilizationBar({ pct, label, resetStr }: { pct: number; label: string; resetStr?: string | null }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="font-mono shrink-0 text-[var(--text-muted)] text-sm w-20 whitespace-nowrap truncate">{label}</span>
-      <div className="flex-1 h-2 bg-[var(--surface-raised)] rounded-full overflow-hidden">
-        <motion.div
-          className={`h-full rounded-full bg-gradient-to-r ${utilizationBarGradient(pct)}`}
-          initial={{ width: 0 }}
-          animate={{ width: `${Math.max(pct, 1)}%` }}
-          transition={{ duration: 0.6, ease: "easeOut" }}
-        />
+    <div>
+      <div className="flex items-center gap-2">
+        <span className="font-mono shrink-0 text-[var(--text-muted)] text-sm w-20 whitespace-nowrap truncate">{label}</span>
+        <div className="flex-1 h-2 bg-[var(--surface-raised)] rounded-full overflow-hidden">
+          <motion.div
+            className={`h-full rounded-full bg-gradient-to-r ${utilizationBarGradient(pct)}`}
+            initial={{ width: 0 }}
+            animate={{ width: `${Math.max(pct, 1)}%` }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+          />
+        </div>
+        <span className={`font-black tabular-nums shrink-0 text-sm w-10 text-right ${pct >= 80 ? "text-rose-400" : pct >= 50 ? "text-amber-400" : "text-[var(--text-body)]"}`}>
+          {pct}%
+        </span>
       </div>
-      <span className={`font-black tabular-nums shrink-0 text-sm w-10 text-right ${pct >= 80 ? "text-rose-400" : pct >= 50 ? "text-amber-400" : "text-[var(--text-body)]"}`}>
-        {pct}%
-      </span>
+      {resetStr && (
+        <p className="text-xs text-[var(--text-dim)] mt-0.5 ml-[5.5rem]">
+          reset in <span className="font-semibold text-[var(--text-muted)]">{resetStr}</span>
+        </p>
+      )}
     </div>
   );
 }
@@ -58,6 +65,7 @@ export default function MonitorDashboard({ username, role }: { username: string;
   const { t, locale } = useTranslation();
   const tRef = useRef(t);
   tRef.current = t;
+  const relativeNowMs = useRelativeNowMs();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<UsageOverviewResponse | null>(null);
@@ -69,6 +77,11 @@ export default function MonitorDashboard({ username, role }: { username: string;
     setError(null);
     try {
       const response = await fetch("/api/monitor/usage?range=month", { cache: "no-store" });
+      if (response.status === 401) {
+        router.replace("/monitor/login");
+        router.refresh();
+        return;
+      }
       const json = (await response.json()) as { ok: boolean; error?: string } & Partial<UsageOverviewResponse>;
       if (!response.ok || !json.ok) {
         setError(json.error || tRef.current("dashboard.loadError"));
@@ -83,7 +96,7 @@ export default function MonitorDashboard({ username, role }: { username: string;
     } finally {
       if (!background) setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => { void loadUsage(false); }, [loadUsage]);
   useEffect(() => {
@@ -212,7 +225,7 @@ export default function MonitorDashboard({ username, role }: { username: string;
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
-                  {claudeAccounts.map((a) => <AccountCard key={a.accountId} account={a} />)}
+                  {claudeAccounts.map((a) => <AccountCard key={a.accountId} account={a} nowMs={relativeNowMs} />)}
                 </motion.div>
               </div>
             )}
@@ -227,7 +240,7 @@ export default function MonitorDashboard({ username, role }: { username: string;
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
-                  {openaiAccounts.map((a) => <AccountCard key={a.accountId} account={a} />)}
+                  {openaiAccounts.map((a) => <AccountCard key={a.accountId} account={a} nowMs={relativeNowMs} />)}
                 </motion.div>
               </div>
             )}
@@ -244,7 +257,37 @@ export default function MonitorDashboard({ username, role }: { username: string;
   );
 }
 
-function AccountCard({ account }: { account: AccountUsageReport }) {
+function useRelativeNowMs(intervalMs = 60_000): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+
+  return nowMs;
+}
+
+function formatResetTime(resetsAt: string | null, nowMs: number): string | null {
+  if (!resetsAt) return null;
+  const reset = new Date(resetsAt);
+  if (isNaN(reset.getTime())) return null;
+  const diffMs = reset.getTime() - nowMs;
+  if (diffMs <= 0) return null;
+  const diffH = Math.floor(diffMs / 3_600_000);
+  const diffM = Math.floor((diffMs % 3_600_000) / 60_000);
+  if (diffH >= 24) {
+    const diffD = Math.floor(diffH / 24);
+    const remainH = diffH % 24;
+    return remainH > 0 ? `${diffD}d ${remainH}h` : `${diffD}d`;
+  }
+  if (diffH > 0) return `${diffH}h ${diffM}m`;
+  return `${diffM}m`;
+}
+
+function AccountCard({ account, nowMs }: { account: AccountUsageReport; nowMs: number }) {
   const { t } = useTranslation();
   const isClaude = account.provider === "claude";
   const brand = isClaude ? "var(--brand-claude)" : "var(--brand-openai)";
@@ -276,10 +319,13 @@ function AccountCard({ account }: { account: AccountUsageReport }) {
 
       <div className="space-y-1.5">
         {account.usageInfo && account.usageInfo.windows.length > 0 ? (
-          account.usageInfo.windows.map((win) => {
-            const pct = Math.min(Math.round(win.utilization), 100);
-            return <UtilizationBar key={win.label} pct={pct} label={win.label} />;
-          })
+          <>
+            {account.usageInfo.windows.map((win) => {
+              const pct = Math.min(Math.round(win.utilization), 100);
+              const resetStr = formatResetTime(win.resetsAt, nowMs);
+              return <UtilizationBar key={win.label} pct={pct} label={win.label} resetStr={resetStr} />;
+            })}
+          </>
         ) : account.provider === "openai" && (account.costUsd > 0 || account.requests > 0 || account.tokens > 0) ? (
           <div className="flex gap-3 text-sm">
             <span className="text-[var(--text-muted)]">{t("cost")} <strong className="text-[var(--text-body)]">${account.costUsd.toFixed(2)}</strong></span>
@@ -289,6 +335,7 @@ function AccountCard({ account }: { account: AccountUsageReport }) {
         ) : (
           <p className="text-sm text-[var(--text-dim)]">{t("noUsage")}</p>
         )}
+        {account.usageInfo?.codexMetrics && <CodexMetricsRow metrics={account.usageInfo.codexMetrics} nowMs={nowMs} />}
       </div>
 
       {account.error && <p className="mt-1.5 text-sm font-semibold text-rose-400 truncate">{account.error}</p>}
@@ -299,6 +346,41 @@ function AccountCard({ account }: { account: AccountUsageReport }) {
         {t("dashboard.detailLink")}
       </Link>
     </motion.div>
+  );
+}
+
+function formatRelativeTime(isoStr: string, nowMs: number): string {
+  const diff = nowMs - new Date(isoStr).getTime();
+  if (diff < 0 || isNaN(diff)) return "";
+  const m = Math.floor(diff / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+function CodexMetricsRow({ metrics, nowMs }: { metrics: CodexMetrics; nowMs: number }) {
+  const hasTokens = metrics.sessionTotalTokens > 0;
+  const hasTurns = metrics.totalTurns > 0;
+  if (!hasTokens && !hasTurns && !metrics.lastActivity) return null;
+  return (
+    <div className="mt-1 pt-1 border-t border-[var(--border-card)]">
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--text-muted)]">
+        {hasTurns && (
+          <span>Turns <strong className="text-[var(--text-body)]">{metrics.totalTurns.toLocaleString()}</strong></span>
+        )}
+        {hasTokens && (
+          <span>Tokens <strong className="text-[var(--text-body)]">{metrics.sessionTotalTokens.toLocaleString()}</strong>
+            <span className="text-[var(--text-dim)]"> ({metrics.sessionInputTokens.toLocaleString()}in / {metrics.sessionOutputTokens.toLocaleString()}out)</span>
+          </span>
+        )}
+        {metrics.lastActivity && (
+          <span>Active <strong className="text-[var(--text-body)]">{formatRelativeTime(metrics.lastActivity, nowMs)}</strong></span>
+        )}
+      </div>
+    </div>
   );
 }
 

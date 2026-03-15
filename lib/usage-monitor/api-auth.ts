@@ -3,8 +3,9 @@ import { cookies } from "next/headers";
 import { getSessionCookieName, validateSessionToken } from "@/lib/usage-monitor/auth";
 import type { AuthResult } from "@/lib/usage-monitor/auth";
 import { secureJson } from "@/lib/usage-monitor/response";
+import { resolveCookieSecure } from "@/lib/usage-monitor/cookies";
 
-export async function ensureApiAuth(): Promise<{ ok: true; auth: AuthResult } | { ok: false; response: NextResponse }> {
+export async function ensureApiAuth(request?: Request): Promise<{ ok: true; auth: AuthResult } | { ok: false; response: NextResponse }> {
   const cookieStore = await cookies();
   const token = cookieStore.get(getSessionCookieName())?.value;
   const auth = validateSessionToken(token);
@@ -15,11 +16,26 @@ export async function ensureApiAuth(): Promise<{ ok: true; auth: AuthResult } | 
     };
   }
 
+  // Refresh the cookie maxAge to keep it in sync with the renewed DB session
+  try {
+    cookieStore.set({
+      name: getSessionCookieName(),
+      value: token!,
+      httpOnly: true,
+      sameSite: "strict",
+      secure: request ? resolveCookieSecure(request) : true,
+      path: "/",
+      maxAge: 60 * 60 * 12,
+    });
+  } catch {
+    // Cookie refresh is best-effort; some read-only contexts may not allow set
+  }
+
   return { ok: true, auth };
 }
 
-export async function ensureApiAdmin(): Promise<{ ok: true; auth: AuthResult } | { ok: false; response: NextResponse }> {
-  const auth = await ensureApiAuth();
+export async function ensureApiAdmin(request?: Request): Promise<{ ok: true; auth: AuthResult } | { ok: false; response: NextResponse }> {
+  const auth = await ensureApiAuth(request);
   if (!auth.ok) return auth;
   if (auth.auth.user.role !== "admin") {
     return {

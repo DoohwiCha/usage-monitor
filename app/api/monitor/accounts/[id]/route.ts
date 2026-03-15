@@ -26,8 +26,8 @@ function parseBooleanInput(value: unknown): boolean {
   return Boolean(value);
 }
 
-export async function GET(_: Request, context: RouteContext) {
-  const auth = await ensureApiAdmin();
+export async function GET(request: Request, context: RouteContext) {
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   const { id } = await context.params;
@@ -54,7 +54,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAdmin();
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   const { id } = await context.params;
@@ -107,7 +107,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAdmin();
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   const { id } = await context.params;

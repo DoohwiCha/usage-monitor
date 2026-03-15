@@ -1,8 +1,8 @@
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
 import { acquireBrowserSlot, releaseBrowserSlot, BrowserPoolExhaustedError } from "@/lib/usage-monitor/browser-pool";
+import { resolveBrowserProfilePath } from "@/lib/usage-monitor/browser-profile-path";
 import { logger } from "@/lib/usage-monitor/logger";
 import { auditLog } from "@/lib/usage-monitor/audit";
 import { secureJson } from "@/lib/usage-monitor/response";
@@ -16,7 +16,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!verifyCsrfOrigin(request)) {
     return secureJson({ ok: false, error: "Invalid request." }, { status: 403 });
   }
-  const auth = await ensureApiAdmin();
+  const auth = await ensureApiAdmin(request);
   if (!auth.ok) return auth.response;
 
   const { id } = await context.params;
@@ -68,7 +68,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   let browserContext: Awaited<ReturnType<typeof playwright.chromium.launchPersistentContext>> | undefined;
   try {
-    const profileDir = join(process.cwd(), "data", "browser-profiles", `claude-${id}`);
+    const profileDir = resolveBrowserProfilePath("claude", id);
     mkdirSync(profileDir, { recursive: true });
 
     browserContext = await playwright.chromium.launchPersistentContext(profileDir, {

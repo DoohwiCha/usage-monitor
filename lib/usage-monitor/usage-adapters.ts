@@ -1,4 +1,4 @@
-import type { AccountUsageReport, ProviderUsageInfo, UtilizationWindow, MonitorAccount, ResolvedRange, UsagePoint } from "@/lib/usage-monitor/types";
+import type { AccountUsageReport, ProviderUsageInfo, UtilizationWindow, MonitorAccount, ResolvedRange, UsagePoint, CodexMetrics } from "@/lib/usage-monitor/types";
 import { toUtcDayKey } from "@/lib/usage-monitor/range";
 import fs from "node:fs";
 import os from "node:os";
@@ -179,6 +179,11 @@ async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<Account
       five_hour_limit_pct?: number;
       weekly_limit_pct?: number;
       last_activity?: string;
+      total_turns?: number;
+      session_turns?: number;
+      session_input_tokens?: number;
+      session_output_tokens?: number;
+      session_total_tokens?: number;
     };
 
     const windows: UtilizationWindow[] = [];
@@ -198,13 +203,25 @@ async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<Account
       });
     }
 
-    if (windows.length === 0 && !billing) {
+    // Extract Codex-specific metrics (tokens, turns, activity)
+    const codexMetrics: CodexMetrics = {
+      totalTurns: toNumber(metrics.total_turns),
+      sessionTurns: toNumber(metrics.session_turns),
+      sessionInputTokens: toNumber(metrics.session_input_tokens),
+      sessionOutputTokens: toNumber(metrics.session_output_tokens),
+      sessionTotalTokens: toNumber(metrics.session_total_tokens),
+      lastActivity: metrics.last_activity || null,
+    };
+
+    const hasCodexData = codexMetrics.totalTurns > 0 ||
+      codexMetrics.sessionTotalTokens > 0 ||
+      codexMetrics.lastActivity !== null;
+
+    if (windows.length === 0 && !billing && !hasCodexData) {
       return emptyReport(account, "not_configured", "OpenAI usage metrics are not available.");
     }
     const report = emptyReport(account, "ok");
-    if (windows.length > 0 || billing) {
-      report.usageInfo = { windows, billing };
-    }
+    report.usageInfo = { windows, billing, codexMetrics: hasCodexData ? codexMetrics : undefined };
     return report;
   } catch {
     if (!billing) {
@@ -585,7 +602,8 @@ let claudeQueueIndex = 0;
 const CLAUDE_INITIAL_FETCH_PENDING_ERROR = "Usage data is being fetched. Please refresh shortly.";
 
 /** Fetch usage for all Claude accounts: rotating queue (1 per cycle), with persistent snapshots. */
-export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], _range: ResolvedRange): Promise<AccountUsageReport[]> {
+export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], range: ResolvedRange): Promise<AccountUsageReport[]> {
+  void range;
   // Step 1: Build results from cache → stale → DB snapshot → empty
   const results: Map<string, AccountUsageReport> = new Map();
   for (const account of accounts) {

@@ -2,17 +2,20 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import type { AccountUsageReport, UtilizationWindow, ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/types";
+import type { AccountUsageReport, UtilizationWindow, ProviderType, PublicMonitorAccount, CodexMetrics } from "@/lib/usage-monitor/types";
 import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
 import LanguageSelector from "./LanguageSelector";
 import { ToggleSwitch, Spinner, brandVar, brandLightVar } from "./shared";
 
 export default function AccountDetail({ id }: { id: string }) {
+  const router = useRouter();
   const { t } = useTranslation();
   const tRef = useRef(t);
   tRef.current = t;
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<PublicMonitorAccount | null>(null);
@@ -20,6 +23,7 @@ export default function AccountDetail({ id }: { id: string }) {
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [claudeLogging, setClaudeLogging] = useState(false);
   const [openaiLogging, setOpenaiLogging] = useState(false);
   const [form, setForm] = useState({ name: "", provider: "claude" as ProviderType, enabled: false, sessionCookie: "", apiKey: "", organizationId: "" });
@@ -38,6 +42,11 @@ export default function AccountDetail({ id }: { id: string }) {
       }
 
       const aRes = accountResult.value;
+      if (aRes.status === 401) {
+        router.replace("/monitor/login");
+        router.refresh();
+        return;
+      }
       const aJson = (await aRes.json()) as { ok: boolean; account?: PublicMonitorAccount; error?: string };
       if (!aRes.ok || !aJson.ok || !aJson.account) {
         setError(aJson.error || "detail.loadAccountError");
@@ -49,6 +58,11 @@ export default function AccountDetail({ id }: { id: string }) {
 
       if (usageResult.status === "fulfilled") {
         const uRes = usageResult.value;
+        if (uRes.status === 401) {
+          router.replace("/monitor/login");
+          router.refresh();
+          return;
+        }
         const uJson = (await uRes.json()) as { ok: boolean; accounts?: AccountUsageReport[]; error?: string };
         if (uRes.ok && uJson.ok && uJson.accounts?.[0]) {
           setReport(uJson.accounts[0]);
@@ -59,10 +73,14 @@ export default function AccountDetail({ id }: { id: string }) {
         setError("detail.loadUsageError");
       }
     } catch { setError("detail.apiCallError"); } finally { setLoading(false); }
-  }, [id]);
+  }, [id, router]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { const timer = window.setInterval(() => { void load(); }, 60_000); return () => window.clearInterval(timer); }, [load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => { setNowTs(Date.now()); }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const title = useMemo(() => account?.name || "Account", [account]);
   const isClaude = form.provider === "claude";
@@ -102,6 +120,17 @@ export default function AccountDetail({ id }: { id: string }) {
       if (!res.ok || !json.ok) { setError(json.error || "detail.connectError"); if (json.account) setAccount(json.account); return; }
       setSaveMessage(json.message || t("detail.connectSuccess")); if (json.account) setAccount(json.account); await load();
     } catch { setError("detail.connectError"); } finally { setConnecting(false); }
+  }
+
+  async function handleAccountLogout() {
+    if (!confirm(t("detail.logoutConfirm"))) return;
+    setLoggingOut(true); setSaveMessage(null); setError(null);
+    try {
+      const res = await fetch(`/api/monitor/accounts/${id}/logout`, { method: "POST" });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!res.ok || !json.ok) { setError(json.error || "detail.saveError"); return; }
+      setSaveMessage(t("detail.logoutSuccess")); setForm((p) => ({ ...p, sessionCookie: "", apiKey: "", organizationId: "" })); await load();
+    } catch { setError("detail.saveApiError"); } finally { setLoggingOut(false); }
   }
 
   return (
@@ -231,6 +260,12 @@ export default function AccountDetail({ id }: { id: string }) {
               className="inline-flex items-center gap-2 rounded-xl border border-[var(--border-card)] px-4 py-2.5 font-bold text-base text-[var(--text-body)] hover:border-[var(--border-hover)] disabled:opacity-50 transition-all">
               {connecting && <Spinner className="h-4 w-4" />}{connecting ? t("detail.testing") : t("detail.testConnection")}
             </button>
+            {(account?.hasSessionCookie || account?.hasApiKey) && (
+              <button onClick={() => void handleAccountLogout()} disabled={loggingOut}
+                className="inline-flex items-center gap-2 rounded-xl border border-rose-500/30 px-4 py-2.5 font-bold text-base text-rose-400 hover:bg-rose-500/10 disabled:opacity-50 transition-all ml-auto">
+                {loggingOut && <Spinner className="h-4 w-4" />}{loggingOut ? t("detail.loggingOut") : t("detail.accountLogout")}
+              </button>
+            )}
           </div>
         </div>
 
@@ -261,6 +296,8 @@ export default function AccountDetail({ id }: { id: string }) {
                 </p>
               </div>
             )}
+
+            {report.usageInfo?.codexMetrics && <CodexMetricsPanel metrics={report.usageInfo.codexMetrics} nowTs={nowTs} />}
 
             {report.usageInfo?.extraUsage?.enabled && (
               <div className="glass-card rounded-xl p-5">
@@ -319,6 +356,66 @@ export default function AccountDetail({ id }: { id: string }) {
         )}
       </div>
     </main>
+  );
+}
+
+function CodexMetricsPanel({ metrics, nowTs }: { metrics: CodexMetrics; nowTs: number }) {
+  const hasTokens = metrics.sessionTotalTokens > 0;
+  const hasTurns = metrics.totalTurns > 0;
+  if (!hasTokens && !hasTurns && !metrics.lastActivity) return null;
+
+  function formatRelative(isoStr: string): string {
+    const diff = nowTs - new Date(isoStr).getTime();
+    if (diff < 0 || isNaN(diff)) return "";
+    const m = Math.floor(diff / 60_000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return `${d}d ago`;
+  }
+
+  return (
+    <div className="glass-card rounded-xl p-5">
+      <h2 className="text-lg font-black text-[var(--text-heading)] mb-2">Codex Metrics</h2>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-base">
+        {hasTurns && (
+          <div>
+            <p className="text-sm text-[var(--text-muted)]">Total Turns</p>
+            <p className="font-black text-[var(--text-heading)]">{metrics.totalTurns.toLocaleString()}</p>
+          </div>
+        )}
+        {metrics.sessionTurns > 0 && (
+          <div>
+            <p className="text-sm text-[var(--text-muted)]">Session Turns</p>
+            <p className="font-black text-[var(--text-heading)]">{metrics.sessionTurns.toLocaleString()}</p>
+          </div>
+        )}
+        {hasTokens && (
+          <>
+            <div>
+              <p className="text-sm text-[var(--text-muted)]">Input Tokens</p>
+              <p className="font-black text-[var(--text-heading)]">{metrics.sessionInputTokens.toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-sm text-[var(--text-muted)]">Output Tokens</p>
+              <p className="font-black text-[var(--text-heading)]">{metrics.sessionOutputTokens.toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-sm text-[var(--text-muted)]">Total Tokens</p>
+              <p className="font-black text-[var(--text-heading)]">{metrics.sessionTotalTokens.toLocaleString()}</p>
+            </div>
+          </>
+        )}
+        {metrics.lastActivity && (
+          <div>
+            <p className="text-sm text-[var(--text-muted)]">Last Activity</p>
+            <p className="font-black text-[var(--text-heading)]">{formatRelative(metrics.lastActivity)}</p>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -2,16 +2,33 @@ import Database from "better-sqlite3";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 
-const DB_PATH = path.join(process.cwd(), "data", "usage-monitor.db");
-
 let _db: Database.Database | null = null;
+let _dbPath: string | null = null;
+
+export function resolveDbPath(): string {
+  const configuredPath = process.env.MONITOR_DB_PATH?.trim();
+  if (!configuredPath) {
+    return path.join(process.cwd(), "data", "usage-monitor.db");
+  }
+
+  return path.isAbsolute(configuredPath)
+    ? configuredPath
+    : path.resolve(configuredPath);
+}
 
 export function getDb(): Database.Database {
-  if (_db) return _db;
+  const dbPath = resolveDbPath();
 
-  mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  if (_db && _dbPath === dbPath) return _db;
+  if (_db && _dbPath !== dbPath) {
+    _db.close();
+    _db = null;
+  }
 
-  _db = new Database(DB_PATH);
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+
+  _db = new Database(dbPath);
+  _dbPath = dbPath;
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
   _db.pragma("busy_timeout = 5000");
@@ -143,4 +160,5 @@ export function closeDb(): void {
     _db.close();
     _db = null;
   }
+  _dbPath = null;
 }

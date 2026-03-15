@@ -72,6 +72,15 @@ export interface UtilizationWindow {
   resetsAt: string | null;
 }
 
+export interface CodexMetrics {
+  totalTurns: number;
+  sessionTurns: number;
+  sessionInputTokens: number;
+  sessionOutputTokens: number;
+  sessionTotalTokens: number;
+  lastActivity: string | null;
+}
+
 export interface ProviderUsageInfo {
   windows: UtilizationWindow[];
   billing?: {
@@ -84,6 +93,7 @@ export interface ProviderUsageInfo {
     usedCredits: number;
     monthlyLimit: number | null;
   };
+  codexMetrics?: CodexMetrics;
 }
 
 export interface AccountUsageReport {

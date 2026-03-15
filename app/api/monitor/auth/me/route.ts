@@ -3,8 +3,8 @@ import { secureJson } from "@/lib/usage-monitor/response";
 
 export const runtime = "nodejs";
 
-export async function GET() {
-  const check = await ensureApiAuth();
+export async function GET(request: Request) {
+  const check = await ensureApiAuth(request);
   if (!check.ok) return check.response;
 
   return secureJson({

@@ -23,9 +23,7 @@ describe("resolveRange", () => {
   });
 
   it("day range spans ~1 day", () => {
-    const before = Date.now();
     const range = resolveRange("day");
-    const after = Date.now();
 
     const diffMs = range.end.getTime() - range.start.getTime();
     // Should be approximately 24 hours (within a small tolerance)

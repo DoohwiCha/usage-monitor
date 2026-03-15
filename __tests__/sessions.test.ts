@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   createSession,
   validateSession,
@@ -9,7 +9,6 @@ import {
 } from "@/lib/usage-monitor/sessions";
 import { createUser } from "@/lib/usage-monitor/users";
 import { getDb } from "@/lib/usage-monitor/db";
-import { resetDb } from "./setup";
 
 async function makeUser(username = "sessionuser"): Promise<string> {
   const user = await createUser(username, "password123");

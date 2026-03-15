@@ -2,7 +2,7 @@
  * Auth module - bridges sessions, users, and cookie management.
  * Re-exports key functions for backward compatibility.
  */
-import { validateSession, getSessionCookieName, createSession, revokeSession, revokeAllUserSessions } from "@/lib/usage-monitor/sessions";
+import { validateSession, createSession, revokeSession, revokeAllUserSessions } from "@/lib/usage-monitor/sessions";
 import { authenticateUser, ensureAdminExists, getUserById } from "@/lib/usage-monitor/users";
 import type { User } from "@/lib/usage-monitor/users";
 

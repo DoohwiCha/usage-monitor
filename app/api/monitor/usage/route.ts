@@ -9,7 +9,7 @@ import { logger } from "@/lib/usage-monitor/logger";
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  const auth = await ensureApiAuth();
+  const auth = await ensureApiAuth(request);
   if (!auth.ok) return auth.response;
 
   const { searchParams } = new URL(request.url);

@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { checkRateLimit, resetRateLimit } from "@/lib/usage-monitor/rate-limiter";
-import { resetDb } from "./setup";
 
 describe("checkRateLimit (login category: 5 attempts per window)", () => {
   it("allows requests within the limit", () => {

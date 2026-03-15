@@ -55,10 +55,27 @@ export function createSession(userId: string, ip?: string, userAgent?: string): 
 export function validateSession(token: string): Session | null {
   const db = getDb();
   const tokenHash = hashToken(token);
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
   const row = db.prepare("SELECT * FROM sessions WHERE token_hash = ? AND expires_at > ?").get(tokenHash, nowIso) as SessionRow | undefined;
 
   if (!row) return null;
+
+  // Sliding window renewal: extend session if less than half TTL remaining
+  const expiresAt = new Date(row.expires_at);
+  const remainingMs = expiresAt.getTime() - now.getTime();
+  if (remainingMs < SESSION_TTL_MS / 2) {
+    const newExpiresAt = new Date(now.getTime() + SESSION_TTL_MS);
+    db.prepare("UPDATE sessions SET expires_at = ? WHERE id = ?").run(newExpiresAt.toISOString(), row.id);
+    return {
+      id: row.id,
+      userId: row.user_id,
+      expiresAt: newExpiresAt.toISOString(),
+      createdAt: row.created_at,
+      ipAddress: row.ip_address,
+      userAgent: row.user_agent,
+    };
+  }
 
   return {
     id: row.id,

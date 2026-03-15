@@ -93,8 +93,9 @@ cp .env.example .env.local
 |----------|-------------|----------|
 | `MONITOR_ADMIN_USER` | Initial admin username | **Yes** |
 | `MONITOR_ADMIN_PASS` | Initial admin password (min 8 chars) | **Yes** |
-| `MONITOR_SESSION_SECRET` | Session signing key (use `openssl rand -hex 32`) | **Yes** |
 | `MONITOR_ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM (use `openssl rand -hex 32`) | **Yes** |
+| `MONITOR_DB_PATH` | Override SQLite database file path (advanced / test) | No |
+| `MONITOR_BROWSER_PROFILE_ROOT` | Override persistent Playwright browser-profile root | No |
 | `MONITOR_COOKIE_SECURE` | Override login cookie `secure` flag: `true` or `false` (default: auto by request protocol) | No |
 | `TRUST_PROXY` | Trust proxy IP headers for login rate-limit key (`true` to enable) | No |
 | `TRUST_PROXY_SHARED_SECRET` | Shared secret required to trust forwarded IP headers (`x-monitor-proxy-secret`) | No (recommended with `TRUST_PROXY=true`) |
@@ -103,7 +104,6 @@ cp .env.example .env.local
 Generate secrets:
 
 ```bash
-openssl rand -hex 32  # for MONITOR_SESSION_SECRET
 openssl rand -hex 32  # for MONITOR_ENCRYPTION_KEY
 ```
 
@@ -113,6 +113,8 @@ openssl rand -hex 32  # for MONITOR_ENCRYPTION_KEY
 
 - If you moved `data/usage-monitor.db` to another machine, reuse the same `MONITOR_ENCRYPTION_KEY` value from the original machine. A different key cannot decrypt saved cookies/API keys.
 - If usage or connection checks return an encryption-key mismatch error, set the original `MONITOR_ENCRYPTION_KEY` and restart the server.
+- Browser login profiles are stored outside the project tree by default under `~/.usage-monitor/browser-profiles`. Override with `MONITOR_BROWSER_PROFILE_ROOT` if needed.
+- To move the SQLite database, set `MONITOR_DB_PATH` to the target file path before starting the server.
 - Login session cookie `secure` now follows request protocol automatically (`https` => secure, `http` => non-secure).
 - If reverse proxy/TLS setup needs explicit behavior, set `MONITOR_COOKIE_SECURE=true` or `MONITOR_COOKIE_SECURE=false`.
 - If you run behind a reverse proxy/CDN, set `TRUST_PROXY=true`.
@@ -195,7 +197,8 @@ usage-monitor/
 │       ├── api-auth.ts         # API route auth + CSRF
 │       ├── server-auth.ts      # Server component auth
 │       ├── rate-limiter.ts     # SQLite-backed sliding window rate limiter
-│       ├── browser-pool.ts     # Playwright concurrency control (max 2)
+│       ├── browser-pool.ts     # Playwright concurrency control (max 3)
+│       ├── browser-profile-path.ts # Persistent browser profile path helpers
 │       ├── usage-cache.ts      # In-memory usage result cache (3min TTL)
 │       ├── usage-adapters.ts   # Claude/OpenAI API adapters
 │       ├── range.ts            # Date range utilities
@@ -211,7 +214,7 @@ usage-monitor/
 │   └── range.test.ts           # Date range tests
 ├── scripts/
 │   └── migrate-json-to-sqlite.ts  # JSON → SQLite migration
-├── middleware.ts               # Edge auth middleware
+├── proxy.ts                    # Edge auth proxy
 ├── data/                       # SQLite database (gitignored)
 └── docs/screenshots/           # App screenshots
 ```
