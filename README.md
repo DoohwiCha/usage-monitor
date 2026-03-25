@@ -13,7 +13,7 @@ Built with Next.js 16, React 19, TypeScript, Tailwind CSS v4, and Framer Motion.
 - **Multi-Account Support** — Monitor up to 12 Claude and OpenAI accounts simultaneously
 - **Real-time Usage Tracking** — Auto-refresh every 60 seconds with background updates
 - **Rate Limit Monitoring** — Visualize Claude usage windows (5h, 7d) with progress bars
-- **Browser Login** — One-click Claude/OpenAI login via Playwright (auto-saves session cookies)
+- **Browser Login** — One-click Claude login via Playwright (auto-saves cookies) plus ChatGPT subscription import for OpenAI accounts
 - **Multi-User Auth** — Scrypt-hashed passwords, role-based access (admin/viewer), server-side sessions
 - **Dark / Light Theme** — Beautiful glass-morphism UI with theme toggle
 - **6 Languages** — English, Korean, Japanese, Chinese, Spanish, Portuguese
@@ -143,11 +143,14 @@ npx tsx scripts/migrate-json-to-sqlite.ts
 
 ### Browser Login (Optional)
 
-To use one-click browser login for Claude/OpenAI:
+To use browser-assisted login:
 
 ```bash
 npx playwright install chromium
 ```
+
+- **Claude** browser login saves session cookies used for Claude usage collection.
+- **OpenAI** browser login imports subscription metadata only. Actual OpenAI usage collection uses an **Admin API key** or local `~/.omx/metrics.json`.
 
 ### Run Tests
 

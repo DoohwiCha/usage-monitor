@@ -7,6 +7,8 @@ import path from "node:path";
 import { getCached, setCached, getStale, isRateLimited, markRateLimited } from "@/lib/usage-monitor/usage-cache";
 import { logger } from "@/lib/usage-monitor/logger";
 import { getDb } from "@/lib/usage-monitor/db";
+import { acquireBrowserSlot, releaseBrowserSlot } from "@/lib/usage-monitor/browser-pool";
+import { resolveBrowserProfileCandidates } from "@/lib/usage-monitor/browser-profile-path";
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -97,6 +99,22 @@ function buildOpenAIHeaders(account: MonitorAccount): HeadersInit {
   return headers;
 }
 
+export async function fetchOpenAIIdentity(account: MonitorAccount): Promise<{ email: string; name: string } | null> {
+  if (!account.apiKey) return null;
+  try {
+    const headers = buildOpenAIHeaders(account);
+    const raw = await fetchJson("https://api.openai.com/v1/organization/users?limit=50", headers) as {
+      data?: Array<{ email?: string; name?: string; role?: string }>;
+    };
+    if (!raw.data || !Array.isArray(raw.data)) return null;
+    const owner = raw.data.find(u => u.role === "owner") || raw.data[0];
+    if (!owner?.email) return null;
+    return { email: owner.email, name: owner.name || "" };
+  } catch {
+    return null;
+  }
+}
+
 function parseOpenAICostPoints(raw: unknown): UsagePoint[] {
   const points: UsagePoint[] = [];
   const buckets = (raw as { data?: Array<{ start_time?: number; results?: Array<{ amount?: { value?: number } }> }> })?.data || [];
@@ -133,6 +151,325 @@ function parseOpenAIUsagePoints(raw: unknown): UsagePoint[] {
   return points;
 }
 
+type OpenAIStatusMetrics = {
+  five_hour_limit_pct?: number;
+  weekly_limit_pct?: number;
+  last_activity?: string;
+  total_turns?: number;
+  session_turns?: number;
+  session_input_tokens?: number;
+  session_output_tokens?: number;
+  session_total_tokens?: number;
+};
+
+type CodexQuotaSnapshot = {
+  five_hour_limit_pct?: number;
+  weekly_limit_pct?: number;
+  timestamp?: string;
+};
+
+function readLatestCodexQuotaSnapshot(): CodexQuotaSnapshot | null {
+  const sessionsRoot = path.join(process.env.HOME || os.homedir(), ".codex", "sessions");
+  if (!fs.existsSync(sessionsRoot)) return null;
+
+  const sessionFiles: string[] = [];
+  const stack = [sessionsRoot];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        sessionFiles.push(fullPath);
+      }
+    }
+  }
+
+  sessionFiles.sort((a, b) => b.localeCompare(a));
+
+  for (const file of sessionFiles.slice(0, 20)) {
+    let content: string;
+    try {
+      content = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+
+    const lines = content.trim().split("\n").reverse();
+    for (const line of lines) {
+      try {
+        const row = JSON.parse(line) as {
+          timestamp?: string;
+          type?: string;
+          payload?: {
+            type?: string;
+            rate_limits?: {
+              primary?: { used_percent?: number };
+              secondary?: { used_percent?: number };
+            };
+          };
+        };
+
+        if (row.type !== "event_msg" || row.payload?.type !== "token_count") continue;
+
+        const primary = row.payload.rate_limits?.primary?.used_percent;
+        const secondary = row.payload.rate_limits?.secondary?.used_percent;
+        if (typeof primary !== "number" && typeof secondary !== "number") continue;
+
+        return {
+          ...(typeof primary === "number" ? { five_hour_limit_pct: primary } : {}),
+          ...(typeof secondary === "number" ? { weekly_limit_pct: secondary } : {}),
+          ...(row.timestamp ? { timestamp: row.timestamp } : {}),
+        };
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildOpenAIBilling(account: MonitorAccount): ProviderUsageInfo["billing"] | undefined {
+  return account.subscriptionInfo?.plan
+    ? {
+        status: account.subscriptionInfo.plan,
+        nextChargeDate: account.subscriptionInfo.renewsAt || null,
+        interval: account.subscriptionInfo.billingPeriod || null,
+      }
+    : undefined;
+}
+
+export function parseOpenAIWhamUsageInfo(raw: unknown, account: MonitorAccount): ProviderUsageInfo | undefined {
+  return parseOpenAIWhamUsageInfoWithIdentity(raw, account);
+}
+
+function parseOpenAIWhamUsageInfoWithIdentity(
+  raw: unknown,
+  account: MonitorAccount,
+  identity?: { email?: string | null; accountId?: string | null; planType?: string | null },
+): ProviderUsageInfo | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const data = raw as Record<string, unknown>;
+  const rateLimit = data.rate_limit as Record<string, unknown> | undefined;
+  const primaryWindow = rateLimit?.primary_window as Record<string, unknown> | undefined;
+  const secondaryWindow = rateLimit?.secondary_window as Record<string, unknown> | undefined;
+
+  const windows: UtilizationWindow[] = [];
+  if (typeof primaryWindow?.used_percent === "number") {
+    windows.push({
+      label: "5h",
+      utilization: Math.min(Math.round(primaryWindow.used_percent), 100),
+      resetsAt: null,
+    });
+  }
+  if (typeof secondaryWindow?.used_percent === "number") {
+    windows.push({
+      label: "wk",
+      utilization: Math.min(Math.round(secondaryWindow.used_percent), 100),
+      resetsAt: null,
+    });
+  }
+
+  const billing = buildOpenAIBilling(account) || (typeof data.plan_type === "string"
+    ? {
+        status: String(data.plan_type),
+        nextChargeDate: null,
+        interval: null,
+      }
+    : undefined);
+
+  if (windows.length === 0 && !billing) return undefined;
+  return {
+    windows,
+    sourceScope: "account",
+    accountIdentity: {
+      email: identity?.email || (typeof data.email === "string" ? data.email : null),
+      accountId: identity?.accountId || (typeof data.account_id === "string" ? data.account_id : null),
+      planType: identity?.planType || (typeof data.plan_type === "string" ? data.plan_type : null),
+    },
+    ...(billing ? { billing } : {}),
+  };
+}
+
+async function fetchOpenAIUsageViaBrowserProfile(account: MonitorAccount): Promise<AccountUsageReport | null> {
+  const profilePaths = resolveBrowserProfileCandidates("openai", account.id).filter((candidate) => fs.existsSync(candidate));
+  if (profilePaths.length === 0) return null;
+
+  const playwright = await import("playwright").catch(() => null);
+  if (!playwright) return null;
+
+  await acquireBrowserSlot();
+  try {
+    for (const profilePath of profilePaths) {
+      let context: Awaited<ReturnType<typeof playwright.chromium.launchPersistentContext>> | undefined;
+      try {
+        context = await playwright.chromium.launchPersistentContext(profilePath, {
+          headless: true,
+          args: [
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+            "--use-gl=swiftshader",
+            "--ozone-platform=x11",
+          ],
+          userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          locale: "en-US",
+          timezoneId: "America/New_York",
+        });
+
+        const cookies = await context.cookies("https://chatgpt.com");
+        const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+        if (!cookieHeader) continue;
+
+        const commonHeaders = {
+          Cookie: cookieHeader,
+          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          "Accept": "application/json, text/plain, */*",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Referer": "https://chatgpt.com/",
+          "Origin": "https://chatgpt.com",
+        };
+
+        const sessionRes = await fetch("https://chatgpt.com/api/auth/session", { headers: commonHeaders });
+        if (!sessionRes.ok) continue;
+        const sessionJson = await sessionRes.json() as {
+          accessToken?: string;
+          user?: { email?: string };
+          account?: { id?: string; planType?: string };
+        };
+        if (!sessionJson.accessToken || !sessionJson.account?.id) continue;
+
+        const usageRes = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+          headers: {
+            "Authorization": `Bearer ${sessionJson.accessToken}`,
+            "ChatGPT-Account-Id": sessionJson.account.id,
+            "User-Agent": commonHeaders["User-Agent"],
+            "Accept": commonHeaders["Accept"],
+            "Accept-Language": commonHeaders["Accept-Language"],
+            "Referer": commonHeaders["Referer"],
+            "Origin": commonHeaders["Origin"],
+          },
+        });
+        if (!usageRes.ok) continue;
+
+        const usageJson = await usageRes.json();
+        const usageInfo = parseOpenAIWhamUsageInfoWithIdentity(usageJson, {
+          ...account,
+          subscriptionInfo: account.subscriptionInfo || (sessionJson.account.planType ? { plan: sessionJson.account.planType } : null),
+        }, {
+          email: sessionJson.user?.email || null,
+          accountId: sessionJson.account.id,
+          planType: sessionJson.account.planType || null,
+        });
+        if (!usageInfo) continue;
+
+        const report = emptyReport(account, "ok");
+        report.usageInfo = usageInfo;
+        return report;
+      } catch (error) {
+        logger.warn("[fetchOpenAIUsageViaBrowserProfile] candidate failed", { accountId: account.id, profilePath, error: String(error) });
+      } finally {
+        if (context) await context.close().catch(() => {});
+      }
+    }
+    return null;
+  } finally {
+    releaseBrowserSlot();
+  }
+}
+
+function buildOpenAIStatusUsageInfo(
+  account: MonitorAccount,
+  metrics?: OpenAIStatusMetrics,
+): ProviderUsageInfo | undefined {
+  const billing = buildOpenAIBilling(account);
+  const windows: UtilizationWindow[] = [];
+
+  if (typeof metrics?.five_hour_limit_pct === "number") {
+    windows.push({
+      label: "5h",
+      utilization: Math.min(Math.round(metrics.five_hour_limit_pct), 100),
+      resetsAt: null,
+    });
+  }
+  if (typeof metrics?.weekly_limit_pct === "number") {
+    windows.push({
+      label: "wk",
+      utilization: Math.min(Math.round(metrics.weekly_limit_pct), 100),
+      resetsAt: null,
+    });
+  }
+
+  const codexMetrics: CodexMetrics | undefined = metrics
+    ? {
+        totalTurns: toNumber(metrics.total_turns),
+        sessionTurns: toNumber(metrics.session_turns),
+        sessionInputTokens: toNumber(metrics.session_input_tokens),
+        sessionOutputTokens: toNumber(metrics.session_output_tokens),
+        sessionTotalTokens: toNumber(metrics.session_total_tokens),
+        lastActivity: metrics.last_activity || null,
+      }
+    : undefined;
+
+  const hasCodexData = codexMetrics
+    ? codexMetrics.totalTurns > 0 ||
+      codexMetrics.sessionTurns > 0 ||
+      codexMetrics.sessionInputTokens > 0 ||
+      codexMetrics.sessionOutputTokens > 0 ||
+      codexMetrics.sessionTotalTokens > 0 ||
+      codexMetrics.lastActivity !== null
+    : false;
+
+  if (windows.length === 0 && !billing && !hasCodexData) {
+    return undefined;
+  }
+
+  return {
+    windows,
+    sourceScope: account.apiKey ? "account" : "shared_local",
+    ...(billing ? { billing } : {}),
+    ...(hasCodexData && codexMetrics ? { codexMetrics } : {}),
+  };
+}
+
+async function readOpenAIStatusUsageInfo(account: MonitorAccount): Promise<{ usageInfo?: ProviderUsageInfo; metricsFound: boolean }> {
+  const fs = await import("fs/promises");
+  const metricsPath = path.join(process.env.HOME || "/root", ".omx", "metrics.json");
+
+  try {
+    const raw = await fs.readFile(metricsPath, "utf-8");
+    const metrics = JSON.parse(raw) as OpenAIStatusMetrics;
+    const shouldUseQuotaFallback =
+      (metrics.five_hour_limit_pct == null || metrics.five_hour_limit_pct === 0) &&
+      (metrics.weekly_limit_pct == null || metrics.weekly_limit_pct === 0);
+    const quotaSnapshot = shouldUseQuotaFallback ? readLatestCodexQuotaSnapshot() : null;
+    const mergedMetrics: OpenAIStatusMetrics = {
+      ...metrics,
+      ...(quotaSnapshot?.five_hour_limit_pct != null ? { five_hour_limit_pct: quotaSnapshot.five_hour_limit_pct } : {}),
+      ...(quotaSnapshot?.weekly_limit_pct != null ? { weekly_limit_pct: quotaSnapshot.weekly_limit_pct } : {}),
+      ...(!metrics.last_activity && quotaSnapshot?.timestamp ? { last_activity: quotaSnapshot.timestamp } : {}),
+    };
+    return {
+      usageInfo: buildOpenAIStatusUsageInfo(account, mergedMetrics),
+      metricsFound: true,
+    };
+  } catch {
+    return {
+      usageInfo: buildOpenAIStatusUsageInfo(account),
+      metricsFound: false,
+    };
+  }
+}
+
 async function fetchOpenAIUsage(account: MonitorAccount, range: ResolvedRange): Promise<AccountUsageReport> {
   const headers = buildOpenAIHeaders(account);
 
@@ -146,9 +483,10 @@ async function fetchOpenAIUsage(account: MonitorAccount, range: ResolvedRange): 
   usageUrl.searchParams.set("end_time", String(range.endUnix));
   usageUrl.searchParams.set("bucket_width", "1d");
 
-  const [costRaw, usageRaw] = await Promise.all([
+  const [costRaw, usageRaw, statusUsage] = await Promise.all([
     fetchJson(costsUrl.toString(), headers),
     fetchJson(usageUrl.toString(), headers),
+    readOpenAIStatusUsageInfo(account),
   ]);
 
   const points = [
@@ -156,81 +494,26 @@ async function fetchOpenAIUsage(account: MonitorAccount, range: ResolvedRange): 
     ...parseOpenAIUsagePoints(usageRaw),
   ];
 
-  return sumReport(account, "ok", points);
+  const report = sumReport(account, "ok", points);
+  if (statusUsage.usageInfo) {
+    report.usageInfo = statusUsage.usageInfo;
+  }
+  return report;
 }
 
 // ─── OpenAI (oh-my-codex metrics file read) ──────────────────────
 
 async function fetchOpenAIMetricsUsage(account: MonitorAccount): Promise<AccountUsageReport> {
-  const fs = await import("fs/promises");
-  const path = await import("path");
-  const metricsPath = path.join(process.env.HOME || "/root", ".omx", "metrics.json");
-  const billing = account.subscriptionInfo?.plan
-    ? {
-        status: account.subscriptionInfo.plan,
-        nextChargeDate: account.subscriptionInfo.renewsAt || null,
-        interval: account.subscriptionInfo.billingPeriod || null,
-      }
-    : undefined;
-
-  try {
-    const raw = await fs.readFile(metricsPath, "utf-8");
-    const metrics = JSON.parse(raw) as {
-      five_hour_limit_pct?: number;
-      weekly_limit_pct?: number;
-      last_activity?: string;
-      total_turns?: number;
-      session_turns?: number;
-      session_input_tokens?: number;
-      session_output_tokens?: number;
-      session_total_tokens?: number;
-    };
-
-    const windows: UtilizationWindow[] = [];
-
-    if (typeof metrics.five_hour_limit_pct === "number") {
-      windows.push({
-        label: "5h",
-        utilization: Math.min(Math.round(metrics.five_hour_limit_pct), 100),
-        resetsAt: null,
-      });
-    }
-    if (typeof metrics.weekly_limit_pct === "number") {
-      windows.push({
-        label: "wk",
-        utilization: Math.min(Math.round(metrics.weekly_limit_pct), 100),
-        resetsAt: null,
-      });
-    }
-
-    // Extract Codex-specific metrics (tokens, turns, activity)
-    const codexMetrics: CodexMetrics = {
-      totalTurns: toNumber(metrics.total_turns),
-      sessionTurns: toNumber(metrics.session_turns),
-      sessionInputTokens: toNumber(metrics.session_input_tokens),
-      sessionOutputTokens: toNumber(metrics.session_output_tokens),
-      sessionTotalTokens: toNumber(metrics.session_total_tokens),
-      lastActivity: metrics.last_activity || null,
-    };
-
-    const hasCodexData = codexMetrics.totalTurns > 0 ||
-      codexMetrics.sessionTotalTokens > 0 ||
-      codexMetrics.lastActivity !== null;
-
-    if (windows.length === 0 && !billing && !hasCodexData) {
-      return emptyReport(account, "not_configured", "OpenAI usage metrics are not available.");
-    }
-    const report = emptyReport(account, "ok");
-    report.usageInfo = { windows, billing, codexMetrics: hasCodexData ? codexMetrics : undefined };
-    return report;
-  } catch {
-    if (!billing) {
-      return emptyReport(account, "not_configured", "oh-my-codex metrics not found (~/.omx/metrics.json)");
-    }
-    const report = emptyReport(account, "ok");
-    report.usageInfo = { windows: [], billing };
-    return report;
+  const statusUsage = await readOpenAIStatusUsageInfo(account);
+  if (!statusUsage.usageInfo) {
+    return statusUsage.metricsFound
+      ? emptyReport(account, "not_configured", "OpenAI usage metrics are not available.")
+      : emptyReport(account, "not_configured", "oh-my-codex metrics not found (~/.omx/metrics.json)");
   }
+
+  const report = emptyReport(account, "ok");
+  report.usageInfo = statusUsage.usageInfo;
+  return report;
 }
 
 // ─── Claude (Session Cookie + Playwright) ────────────────────────
@@ -618,7 +901,7 @@ export async function fetchClaudeUsageBatch(accounts: MonitorAccount[], range: R
     const snapshot = loadSnapshot(account);
     if (snapshot) { results.set(account.id, snapshot); continue; }
     // No cached/stale/snapshot data yet: report a truthful pending state instead of synthetic "ok".
-    results.set(account.id, emptyReport(account, "error", CLAUDE_INITIAL_FETCH_PENDING_ERROR));
+    results.set(account.id, emptyReport(account, "pending", CLAUDE_INITIAL_FETCH_PENDING_ERROR));
   }
 
   // Step 2: Find accounts eligible for a fresh fetch (not cached, not rate-limited)
@@ -760,6 +1043,7 @@ function parseClaudeUsageInfo(dataList: unknown[]): ProviderUsageInfo {
 interface ConnectionTestResult {
   ok: boolean;
   message: string;
+  identity?: { email: string; name: string };
 }
 
 export async function testConnection(account: MonitorAccount): Promise<ConnectionTestResult> {
@@ -793,12 +1077,24 @@ export async function testConnection(account: MonitorAccount): Promise<Connectio
       if (account.apiKey) {
         const headers = buildOpenAIHeaders(account);
         await fetchJson("https://api.openai.com/v1/organization/costs?start_time=0&end_time=1&bucket_width=1d", headers);
-        return { ok: true, message: "API key connection successful" };
+        const identity = await fetchOpenAIIdentity(account);
+        return { ok: true, message: `API key connection successful${identity ? ` — ${identity.email}` : ""}`, ...(identity ? { identity } : {}) };
+      }
+      const metricsReport = await fetchOpenAIMetricsUsage(account);
+      const hasLocalMetrics = Boolean(
+        metricsReport.usageInfo?.windows?.length ||
+        metricsReport.usageInfo?.codexMetrics,
+      );
+      if (hasLocalMetrics) {
+        return { ok: true, message: "Local ~/.omx/metrics.json usage source is available." };
+      }
+      if (account.subscriptionInfo?.plan) {
+        return { ok: true, message: "Subscription info is stored. Usage collection still requires an Admin API key or local ~/.omx/metrics.json." };
       }
       if (account.sessionCookie) {
-        return { ok: true, message: "Browser session cookie is stored." };
+        return { ok: false, message: "Stored browser login data is not used for OpenAI usage collection. Use an Admin API key or local ~/.omx/metrics.json." };
       }
-      return { ok: false, message: "API key or browser login required." };
+      return { ok: false, message: "OpenAI usage collection requires an Admin API key or local ~/.omx/metrics.json." };
     }
 
     return { ok: false, message: "Unsupported provider." };
@@ -825,6 +1121,8 @@ export async function fetchUsageForAccount(account: MonitorAccount, range: Resol
       if (account.apiKey) {
         return await fetchOpenAIUsage(account, range);
       }
+      const browserProfileReport = await fetchOpenAIUsageViaBrowserProfile(account);
+      if (browserProfileReport) return browserProfileReport;
       return await fetchOpenAIMetricsUsage(account);
     }
     // Claude accounts with session cookies should go through batch path

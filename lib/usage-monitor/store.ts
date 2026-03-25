@@ -102,13 +102,17 @@ interface AccountRow {
 }
 
 function rowToAccount(row: AccountRow): MonitorAccount {
+  const provider = row.provider as ProviderType;
+  const sessionCookie = row.session_cookie ? decryptSecret(row.session_cookie).trim() || undefined : undefined;
+  const apiKey = row.api_key ? decryptSecret(row.api_key).trim() || undefined : undefined;
+
   return {
     id: row.id,
     name: row.name,
-    provider: row.provider as ProviderType,
+    provider,
     enabled: row.enabled === 1,
-    sessionCookie: row.session_cookie ? decryptSecret(row.session_cookie).trim() || undefined : undefined,
-    apiKey: row.api_key ? decryptSecret(row.api_key).trim() || undefined : undefined,
+    sessionCookie: provider === "claude" ? sessionCookie : undefined,
+    apiKey: provider === "openai" ? apiKey : undefined,
     organizationId: row.organization_id?.trim() || undefined,
     subscriptionInfo: row.subscription_info ? JSON.parse(row.subscription_info) as SubscriptionInfo : undefined,
     createdAt: row.created_at,
@@ -217,6 +221,15 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
     setClauses.push("provider = ?");
     values.push(updates.provider);
   }
+  const targetProvider = updates.provider ?? current.provider;
+  if (updates.provider === "openai" && updates.sessionCookie === undefined) {
+    setClauses.push("session_cookie = ?");
+    values.push(null);
+  }
+  if (updates.provider === "claude" && updates.apiKey === undefined) {
+    setClauses.push("api_key = ?");
+    values.push(null);
+  }
   if (updates.enabled !== undefined) {
     setClauses.push("enabled = ?");
     values.push(updates.enabled ? 1 : 0);
@@ -224,12 +237,12 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
   if (updates.sessionCookie !== undefined) {
     setClauses.push("session_cookie = ?");
     const trimmed = updates.sessionCookie.trim();
-    values.push(trimmed ? encryptSecret(trimmed) : null);
+    values.push(targetProvider === "claude" && trimmed ? encryptSecret(trimmed) : null);
   }
   if (updates.apiKey !== undefined) {
     setClauses.push("api_key = ?");
     const trimmed = updates.apiKey.trim();
-    values.push(trimmed ? encryptSecret(trimmed) : null);
+    values.push(targetProvider === "openai" && trimmed ? encryptSecret(trimmed) : null);
   }
   if (updates.organizationId !== undefined) {
     setClauses.push("organization_id = ?");

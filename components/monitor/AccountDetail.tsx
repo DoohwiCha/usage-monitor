@@ -243,7 +243,6 @@ export default function AccountDetail({ id }: { id: string }) {
               <p>{t("accounts.cookie")}: <span className="text-[var(--text-secondary)]">{account?.sessionCookieMasked || t("accounts.none")}</span></p>
             ) : (
               <>
-                <p>{t("accounts.cookie")}: <span className="text-[var(--text-secondary)]">{account?.sessionCookieMasked || t("accounts.none")}</span></p>
                 <p>{t("accounts.key")}: <span className="text-[var(--text-secondary)]">{account?.apiKeyMasked || t("accounts.none")}</span></p>
                 <p>{t("detail.orgLabel")}: <span className="text-[var(--text-secondary)]">{account?.organizationId || t("accounts.none")}</span></p>
               </>
@@ -260,7 +259,7 @@ export default function AccountDetail({ id }: { id: string }) {
               className="inline-flex items-center gap-2 rounded-xl border border-[var(--border-card)] px-4 py-2.5 font-bold text-base text-[var(--text-body)] hover:border-[var(--border-hover)] disabled:opacity-50 transition-all">
               {connecting && <Spinner className="h-4 w-4" />}{connecting ? t("detail.testing") : t("detail.testConnection")}
             </button>
-            {(account?.hasSessionCookie || account?.hasApiKey) && (
+            {(account?.hasSessionCookie || account?.hasApiKey || Boolean(account?.subscriptionInfo)) && (
               <button onClick={() => void handleAccountLogout()} disabled={loggingOut}
                 className="inline-flex items-center gap-2 rounded-xl border border-rose-500/30 px-4 py-2.5 font-bold text-base text-rose-400 hover:bg-rose-500/10 disabled:opacity-50 transition-all ml-auto">
                 {loggingOut && <Spinner className="h-4 w-4" />}{loggingOut ? t("detail.loggingOut") : t("detail.accountLogout")}
@@ -292,7 +291,13 @@ export default function AccountDetail({ id }: { id: string }) {
               <div className="glass-card rounded-xl p-5">
                 <h2 className="text-lg font-black text-[var(--text-heading)] mb-1">{t("detail.usage")}</h2>
                 <p className="text-base text-[var(--text-muted)]">
-                  {report.status === "disabled" ? t("detail.disabledStatus") : report.status === "not_configured" ? t("detail.needsSetup") : t("noData")}
+                  {report.status === "disabled"
+                    ? t("detail.disabledStatus")
+                    : report.status === "not_configured"
+                      ? t("detail.needsSetup")
+                      : report.status === "pending"
+                        ? (report.error || t("detail.pendingFetch"))
+                        : t("noData")}
                 </p>
               </div>
             )}
@@ -317,6 +322,27 @@ export default function AccountDetail({ id }: { id: string }) {
                   {report.usageInfo.billing.nextChargeDate && <div><p className="text-sm text-[var(--text-muted)]">{t("detail.chargeDate")}</p><p className="font-black text-[var(--text-heading)]">{report.usageInfo.billing.nextChargeDate}</p></div>}
                   {report.usageInfo.billing.interval && <div><p className="text-sm text-[var(--text-muted)]">{t("detail.interval")}</p><p className="font-black text-[var(--text-heading)] capitalize">{report.usageInfo.billing.interval}</p></div>}
                 </div>
+              </div>
+            )}
+
+            {report.provider === "openai" && report.usageInfo?.accountIdentity && (
+              <div className="glass-card rounded-xl p-5">
+                <h2 className="text-lg font-black text-[var(--text-heading)] mb-2">{t("detail.resolvedAccount")}</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-base">
+                  <div>
+                    <p className="text-sm text-[var(--text-muted)]">{t("detail.resolvedEmail")}</p>
+                    <p className="font-black text-[var(--text-heading)] break-all">{report.usageInfo.accountIdentity.email || t("accounts.none")}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-[var(--text-muted)]">{t("detail.resolvedAccountId")}</p>
+                    <p className="font-black text-[var(--text-heading)] break-all">{report.usageInfo.accountIdentity.accountId || t("accounts.none")}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-[var(--text-muted)]">{t("detail.resolvedPlanType")}</p>
+                    <p className="font-black text-[var(--text-heading)] capitalize">{report.usageInfo.accountIdentity.planType || t("accounts.none")}</p>
+                  </div>
+                </div>
+                <p className="mt-3 text-sm text-[var(--text-dim)]">{t("detail.sameAccountWarning")}</p>
               </div>
             )}
 
@@ -351,7 +377,7 @@ export default function AccountDetail({ id }: { id: string }) {
               </>
             )}
 
-            {report.error && <div className="rounded-xl p-4 text-base font-bold text-rose-400" style={{ background: "var(--error-bg)" }}>{t("detail.errorPrefix")}: {report.error}</div>}
+            {report.error && report.status !== "pending" && <div className="rounded-xl p-4 text-base font-bold text-rose-400" style={{ background: "var(--error-bg)" }}>{t("detail.errorPrefix")}: {report.error}</div>}
           </div>
         )}
       </div>

@@ -28,6 +28,7 @@ export async function POST(request: Request, context: RouteContext) {
     // Clear credentials
     await updateMonitorAccount(id, {
       sessionCookie: "",
+      subscriptionInfo: null,
       ...(account.provider === "openai" ? { apiKey: "", organizationId: "" } : {}),
     });
 

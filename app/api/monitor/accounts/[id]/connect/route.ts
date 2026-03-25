@@ -1,5 +1,5 @@
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
-import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
+import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
 import { testConnection } from "@/lib/usage-monitor/usage-adapters";
 import { secureJson } from "@/lib/usage-monitor/response";
 import { logger } from "@/lib/usage-monitor/logger";
@@ -42,6 +42,19 @@ export async function POST(request: Request, context: RouteContext) {
       },
       { status: 400 },
     );
+  }
+
+  // Auto-update account name with identity (like Claude browser login)
+  if (result.identity?.email) {
+    try {
+      const updated = await updateMonitorAccount(id, { name: result.identity.email });
+      const refreshed = updated.accounts.find((a) => a.id === id);
+      return secureJson({
+        ok: true,
+        message: result.message,
+        account: refreshed ? toPublicAccount(refreshed) : toPublicAccount(account),
+      });
+    } catch { /* fall through to default response */ }
   }
 
   return secureJson({

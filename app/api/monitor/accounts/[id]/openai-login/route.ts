@@ -156,12 +156,9 @@ export async function POST(request: Request, context: RouteContext) {
     // Filter and store only auth cookies (remove PII)
     const allCookies = await browserContext.cookies("https://chatgpt.com");
     const filteredCookies = allCookies.filter((c) => AUTH_COOKIE_NAMES.has(c.name));
-    const cookieString = JSON.stringify(filteredCookies);
-
     // Context stays open until finally block — persistent profile is saved on close
-
-    if (!cookieString || cookieString === "[]") {
-      return secureJson({ ok: false, error: "Failed to extract cookies." }, { status: 502 });
+    if (filteredCookies.length === 0) {
+      return secureJson({ ok: false, error: "Failed to confirm logged-in browser session." }, { status: 502 });
     }
 
     const displayName = extractResult.email || extractResult.name || account.name;
@@ -174,7 +171,6 @@ export async function POST(request: Request, context: RouteContext) {
     } : undefined;
 
     const updated = await updateMonitorAccount(id, {
-      sessionCookie: cookieString,
       name: displayName,
       enabled: true,
       ...(subscriptionInfo ? { subscriptionInfo } : {}),
@@ -184,7 +180,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     return secureJson({
       ok: true,
-      message: `Login successful — ${displayName}`,
+      message: `Subscription imported — ${displayName}`,
       account: refreshed ? toPublicAccount(refreshed) : undefined,
     });
   } catch (error) {

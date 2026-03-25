@@ -86,7 +86,7 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="relative z-10 max-w-5xl mx-auto px-6 pt-16 pb-20 text-center">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+        <motion.div initial={false} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <h1 className="text-5xl md:text-6xl font-black gradient-text-brand leading-tight mb-6">
             {t("landing.hero")}
           </h1>
@@ -107,7 +107,7 @@ export default function LandingPage() {
 
         {/* Dashboard preview mockup */}
         <motion.div
-          initial={{ opacity: 0, y: 30 }}
+          initial={false}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2 }}
           className="mt-16 max-w-4xl mx-auto"
@@ -195,7 +195,7 @@ export default function LandingPage() {
           {features.map((feat, i) => (
             <motion.div
               key={feat.titleKey}
-              initial={{ opacity: 0, y: 20 }}
+              initial={false}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.1 * i }}
               className="glass-card rounded-2xl p-6 text-center"

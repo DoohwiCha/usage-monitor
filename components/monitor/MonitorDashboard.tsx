@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AccountUsageReport, UsageOverviewResponse, CodexMetrics } from "@/lib/usage-monitor/types";
+import { collapseSharedLocalOpenAIAccounts } from "@/lib/usage-monitor/display";
 import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
 import { type TranslationKey } from "@/lib/i18n/translations";
@@ -18,6 +19,7 @@ function countDisplay(count: number, t: (key: TranslationKey) => string): string
 function statusDot(status: AccountUsageReport["status"]): string {
   if (status === "ok") return "#10b981";
   if (status === "disabled") return "#71717a";
+  if (status === "pending") return "#3b82f6";
   if (status === "not_configured") return "#f59e0b";
   return "#ef4444";
 }
@@ -104,18 +106,24 @@ export default function MonitorDashboard({ username, role }: { username: string;
     return () => window.clearInterval(timer);
   }, [loadUsage]);
 
-  const { claudeAccounts, openaiAccounts } = useMemo(() => {
-    if (!data) return { claudeAccounts: [], openaiAccounts: [] };
+  const { claudeAccounts, openaiAccounts, openaiAccountCount, sharedLocalOpenaiCount } = useMemo(() => {
+    if (!data) return { claudeAccounts: [], openaiAccounts: [], openaiAccountCount: 0, sharedLocalOpenaiCount: 0 };
     const sorted = [...data.accounts].sort((a, b) => {
       if (a.status === "ok" && b.status !== "ok") return -1;
       if (a.status !== "ok" && b.status === "ok") return 1;
       return b.costUsd - a.costUsd;
     });
+    const rawOpenAIAccounts = sorted.filter((a) => a.provider === "openai");
+    const rawSharedLocalOpenaiCount = rawOpenAIAccounts.filter((a) => a.usageInfo?.sourceScope === "shared_local").length;
+    const sharedName = `${t("dashboard.openaiShared")} (${countDisplay(rawSharedLocalOpenaiCount, t)})`;
+    const openaiDisplay = collapseSharedLocalOpenAIAccounts(rawOpenAIAccounts, sharedName);
     return {
       claudeAccounts: sorted.filter((a) => a.provider === "claude"),
-      openaiAccounts: sorted.filter((a) => a.provider === "openai"),
+      openaiAccounts: openaiDisplay.displayAccounts,
+      openaiAccountCount: rawOpenAIAccounts.length,
+      sharedLocalOpenaiCount: rawSharedLocalOpenaiCount,
     };
-  }, [data]);
+  }, [data, t]);
 
   async function handleLogout() {
     try {
@@ -213,6 +221,8 @@ export default function MonitorDashboard({ username, role }: { username: string;
             <ProviderSummary
               claudeAccounts={claudeAccounts.filter(a => a.status === "ok")}
               openaiAccounts={openaiAccounts.filter(a => a.status === "ok")}
+              openaiAccountCount={openaiAccountCount}
+              sharedLocalOpenaiCount={sharedLocalOpenaiCount}
             />
 
             {/* Claude accounts group */}
@@ -236,7 +246,7 @@ export default function MonitorDashboard({ username, role }: { username: string;
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-openai)]" />
                   <h2 className="text-xl font-black" style={{ color: "var(--brand-openai)" }}>OpenAI</h2>
-                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(openaiAccounts.length, t)}</span>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(openaiAccountCount, t)}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
@@ -291,10 +301,14 @@ function AccountCard({ account, nowMs }: { account: AccountUsageReport; nowMs: n
   const { t } = useTranslation();
   const isClaude = account.provider === "claude";
   const brand = isClaude ? "var(--brand-claude)" : "var(--brand-openai)";
+  const isSharedOpenAIMetrics = account.provider === "openai" && account.usageInfo?.sourceScope === "shared_local";
+  const isSharedAggregateCard = account.accountId.startsWith("shared-local-openai:");
+  const isDuplicateAccountCard = account.accountId.startsWith("duplicate-openai-account:");
 
   function statusLabel(status: AccountUsageReport["status"]): string {
     if (status === "ok") return t("statusOk");
     if (status === "disabled") return t("statusDisabled");
+    if (status === "pending") return t("statusPending");
     if (status === "not_configured") return t("statusNotConfigured");
     return t("statusError");
   }
@@ -336,15 +350,33 @@ function AccountCard({ account, nowMs }: { account: AccountUsageReport; nowMs: n
           <p className="text-sm text-[var(--text-dim)]">{t("noUsage")}</p>
         )}
         {account.usageInfo?.codexMetrics && <CodexMetricsRow metrics={account.usageInfo.codexMetrics} nowMs={nowMs} />}
+        {isSharedOpenAIMetrics && (
+          <div className="space-y-0.5">
+            <p className="text-xs text-[var(--text-dim)]">{t("dashboard.sharedLocalMetrics")}</p>
+            <p className="text-xs text-[var(--text-dim)]">{t("dashboard.notAccountSpecific")}</p>
+          </div>
+        )}
+        {isDuplicateAccountCard && (
+          <div className="space-y-0.5">
+            <p className="text-xs text-[var(--text-dim)]">{account.usageInfo?.accountIdentity?.email || t("dashboard.sharedOpenAIAccount")}</p>
+            <p className="text-xs text-[var(--text-dim)]">{t("dashboard.sameOpenAIAccount")}</p>
+          </div>
+        )}
       </div>
 
-      {account.error && <p className="mt-1.5 text-sm font-semibold text-rose-400 truncate">{account.error}</p>}
+      {account.error && (
+        <p className={`mt-1.5 text-sm font-semibold truncate ${account.status === "pending" ? "text-sky-400" : "text-rose-400"}`}>
+          {account.error}
+        </p>
+      )}
 
-      <Link href={`/monitor/accounts/${account.accountId}`}
-        className="mt-2.5 inline-flex items-center gap-1 text-base font-semibold transition-colors"
-        style={{ color: brand }}>
-        {t("dashboard.detailLink")}
-      </Link>
+      {!isSharedAggregateCard && !isDuplicateAccountCard && (
+        <Link href={`/monitor/accounts/${account.accountId}`}
+          className="mt-2.5 inline-flex items-center gap-1 text-base font-semibold transition-colors"
+          style={{ color: brand }}>
+          {t("dashboard.detailLink")}
+        </Link>
+      )}
     </motion.div>
   );
 }
@@ -362,17 +394,21 @@ function formatRelativeTime(isoStr: string, nowMs: number): string {
 }
 
 function CodexMetricsRow({ metrics, nowMs }: { metrics: CodexMetrics; nowMs: number }) {
-  const hasTokens = metrics.sessionTotalTokens > 0;
-  const hasTurns = metrics.totalTurns > 0;
+  const displayTurns = metrics.totalTurns > 0 ? metrics.totalTurns : metrics.sessionTurns;
+  const displayTokens = metrics.sessionTotalTokens > 0
+    ? metrics.sessionTotalTokens
+    : metrics.sessionInputTokens + metrics.sessionOutputTokens;
+  const hasTokens = displayTokens > 0;
+  const hasTurns = displayTurns > 0;
   if (!hasTokens && !hasTurns && !metrics.lastActivity) return null;
   return (
     <div className="mt-1 pt-1 border-t border-[var(--border-card)]">
       <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--text-muted)]">
         {hasTurns && (
-          <span>Turns <strong className="text-[var(--text-body)]">{metrics.totalTurns.toLocaleString()}</strong></span>
+          <span>Turns <strong className="text-[var(--text-body)]">{displayTurns.toLocaleString()}</strong></span>
         )}
         {hasTokens && (
-          <span>Tokens <strong className="text-[var(--text-body)]">{metrics.sessionTotalTokens.toLocaleString()}</strong>
+          <span>Tokens <strong className="text-[var(--text-body)]">{displayTokens.toLocaleString()}</strong>
             <span className="text-[var(--text-dim)]"> ({metrics.sessionInputTokens.toLocaleString()}in / {metrics.sessionOutputTokens.toLocaleString()}out)</span>
           </span>
         )}
@@ -384,7 +420,17 @@ function CodexMetricsRow({ metrics, nowMs }: { metrics: CodexMetrics; nowMs: num
   );
 }
 
-function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: AccountUsageReport[]; openaiAccounts: AccountUsageReport[] }) {
+function ProviderSummary({
+  claudeAccounts,
+  openaiAccounts,
+  openaiAccountCount,
+  sharedLocalOpenaiCount,
+}: {
+  claudeAccounts: AccountUsageReport[];
+  openaiAccounts: AccountUsageReport[];
+  openaiAccountCount: number;
+  sharedLocalOpenaiCount: number;
+}) {
   const { t } = useTranslation();
 
   function buildWindowMap(accs: AccountUsageReport[]) {
@@ -405,7 +451,6 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
   const openaiTotalCost = openaiAccounts.reduce((s, a) => s + a.costUsd, 0);
   const openaiTotalRequests = openaiAccounts.reduce((s, a) => s + a.requests, 0);
   const openaiTotalTokens = openaiAccounts.reduce((s, a) => s + a.tokens, 0);
-
   if (claudeAccounts.length === 0 && openaiAccounts.length === 0) return null;
 
   return (
@@ -432,7 +477,7 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
           <div className="flex items-center gap-2 mb-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-openai)]" />
             <p className="text-base font-black" style={{ color: "var(--brand-openai)" }}>{t("dashboard.openaiTotal")}</p>
-            <span className="text-sm text-[var(--text-muted)]">{countDisplay(openaiAccounts.length, t)}</span>
+            <span className="text-sm text-[var(--text-muted)]">{countDisplay(openaiAccountCount, t)}</span>
           </div>
           {openaiWindowMap.size > 0 ? (
             <div className="space-y-1.5">
@@ -440,6 +485,11 @@ function ProviderSummary({ claudeAccounts, openaiAccounts }: { claudeAccounts: A
                 const avg = Math.round(pcts.reduce((s, v) => s + v, 0) / pcts.length);
                 return <UtilizationBar key={label} pct={avg} label={label} />;
               })}
+              {sharedLocalOpenaiCount > 1 && (
+                <p className="text-xs text-[var(--text-dim)]">
+                  {sharedLocalOpenaiCount} {t("dashboard.sharedLocalAccountsSuffix")}
+                </p>
+              )}
             </div>
           ) : (openaiTotalCost > 0 || openaiTotalRequests > 0 || openaiTotalTokens > 0) ? (
             <div className="flex gap-4 text-sm">

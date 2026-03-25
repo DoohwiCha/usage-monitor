@@ -83,6 +83,23 @@ describe("updateMonitorAccount", () => {
     const account = updated.accounts.find((a) => a.id === id)!;
     expect(account.sessionCookie).toBeUndefined();
   });
+
+  it("clears incompatible secrets when switching provider", async () => {
+    const { accounts } = await addMonitorAccount({ name: "Switch", provider: "claude", sessionCookie: "old=value", enabled: true });
+    const id = accounts[0].id;
+
+    const switchedToOpenAI = await updateMonitorAccount(id, { provider: "openai", apiKey: "sk-test-12345678" });
+    const openaiAccount = switchedToOpenAI.accounts.find((a) => a.id === id)!;
+    expect(openaiAccount.provider).toBe("openai");
+    expect(openaiAccount.sessionCookie).toBeUndefined();
+    expect(openaiAccount.apiKey).toBe("sk-test-12345678");
+
+    const switchedBackToClaude = await updateMonitorAccount(id, { provider: "claude", sessionCookie: "new=value" });
+    const claudeAccount = switchedBackToClaude.accounts.find((a) => a.id === id)!;
+    expect(claudeAccount.provider).toBe("claude");
+    expect(claudeAccount.sessionCookie).toBe("new=value");
+    expect(claudeAccount.apiKey).toBeUndefined();
+  });
 });
 
 describe("deleteMonitorAccount", () => {

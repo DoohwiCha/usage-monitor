@@ -1,4 +1,5 @@
-import { addMonitorAccount, ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
+import { addMonitorAccount, ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
+import { fetchOpenAIIdentity } from "@/lib/usage-monitor/usage-adapters";
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import type { ProviderType } from "@/lib/usage-monitor/types";
 import { secureJson } from "@/lib/usage-monitor/response";
@@ -75,6 +76,20 @@ export async function POST(request: Request) {
       apiKey: provider === "openai" ? String(body.apiKey || "") : undefined,
       organizationId: provider === "openai" ? String(body.organizationId || "") : undefined,
     });
+
+    // Auto-fetch identity for OpenAI accounts with API key (like Claude browser login)
+    if (provider === "openai" && body.apiKey && (!body.name || !String(body.name).trim())) {
+      try {
+        const newAccount = config.accounts[config.accounts.length - 1];
+        if (newAccount) {
+          const identity = await fetchOpenAIIdentity(newAccount);
+          if (identity?.email) {
+            const updated = await updateMonitorAccount(newAccount.id, { name: identity.email });
+            return secureJson({ ok: true, accounts: updated.accounts.map(toPublicAccount) });
+          }
+        }
+      } catch { /* identity fetch is best-effort */ }
+    }
 
     return secureJson({ ok: true, accounts: config.accounts.map(toPublicAccount) });
   } catch (error) {

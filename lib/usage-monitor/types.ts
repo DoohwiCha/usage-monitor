@@ -18,7 +18,7 @@ export interface MonitorAccount {
   /** OpenAI: Organization ID */
   organizationId?: string;
   /** Subscription/plan info (extracted during browser login) */
-  subscriptionInfo?: SubscriptionInfo;
+  subscriptionInfo?: SubscriptionInfo | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -40,7 +40,7 @@ export interface PublicMonitorAccount {
   hasApiKey: boolean;
   apiKeyMasked: string;
   organizationId?: string;
-  subscriptionInfo?: SubscriptionInfo;
+  subscriptionInfo?: SubscriptionInfo | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -64,7 +64,7 @@ export interface UsagePoint {
   tokens: number;
 }
 
-export type UsageStatus = "ok" | "disabled" | "not_configured" | "error";
+export type UsageStatus = "ok" | "disabled" | "not_configured" | "pending" | "error";
 
 export interface UtilizationWindow {
   label: string;       // "5h", "7d", "wk" etc.
@@ -83,6 +83,12 @@ export interface CodexMetrics {
 
 export interface ProviderUsageInfo {
   windows: UtilizationWindow[];
+  sourceScope?: "account" | "shared_local";
+  accountIdentity?: {
+    email: string | null;
+    accountId: string | null;
+    planType: string | null;
+  };
   billing?: {
     status: string;
     nextChargeDate: string | null;

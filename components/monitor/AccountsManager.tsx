@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { ProviderType, PublicMonitorAccount } from "@/lib/usage-monitor/types";
+import type { AccountUsageReport, ProviderType, PublicMonitorAccount, UsageOverviewResponse } from "@/lib/usage-monitor/types";
+import { getOpenAIIdentityDiagnostics } from "@/lib/usage-monitor/display";
 import ThemeToggle from "./ThemeToggle";
 import { useTranslation } from "@/lib/i18n/context";
 import LanguageSelector from "./LanguageSelector";
@@ -24,15 +25,26 @@ export default function AccountsManager() {
   const [maxAccounts, setMaxAccounts] = useState(12);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [usageAccounts, setUsageAccounts] = useState<AccountUsageReport[]>([]);
   const [newAccount, setNewAccount] = useState({ name: "", provider: "claude" as ProviderType, enabled: false, sessionCookie: "", apiKey: "", organizationId: "" });
 
   const loadAccounts = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch("/api/monitor/accounts", { cache: "no-store" });
-      const json = (await res.json()) as AccountsResponse;
-      if (!res.ok || !json.ok) { setError(json.error || tRef.current("accounts.loadError")); setLoading(false); return; }
+      const [accountsRes, usageRes] = await Promise.all([
+        fetch("/api/monitor/accounts", { cache: "no-store" }),
+        fetch("/api/monitor/usage?range=month", { cache: "no-store" }),
+      ]);
+      const json = (await accountsRes.json()) as AccountsResponse;
+      if (!accountsRes.ok || !json.ok) { setError(json.error || tRef.current("accounts.loadError")); setLoading(false); return; }
       setAccounts(json.accounts); setMaxAccounts(json.maxAccounts);
+
+      const usageJson = (await usageRes.json().catch(() => null)) as ({ ok?: boolean } & Partial<UsageOverviewResponse>) | null;
+      if (usageRes.ok && usageJson?.ok && usageJson.accounts) {
+        setUsageAccounts(usageJson.accounts);
+      } else {
+        setUsageAccounts([]);
+      }
     } catch (err) { console.error(err); setError(tRef.current("accounts.apiCallError")); } finally { setLoading(false); }
   }, []);
 
@@ -80,6 +92,7 @@ export default function AccountsManager() {
 
   const claudeAccounts = accounts.filter((a) => a.provider === "claude");
   const openaiAccounts = accounts.filter((a) => a.provider === "openai");
+  const openaiDiagnostics = getOpenAIIdentityDiagnostics(usageAccounts.filter((account) => account.provider === "openai"));
 
   const countUnit = t("countUnit");
 
@@ -188,7 +201,7 @@ export default function AccountsManager() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {openaiAccounts.map((acc) => {
                     const idx = accounts.indexOf(acc);
-                    return <AccCard key={acc.id} account={acc} idx={idx} total={accounts.length} onMove={moveAccount} onPatch={patchAccount} onDelete={deleteAccount} />;
+                    return <AccCard key={acc.id} account={acc} idx={idx} total={accounts.length} diagnostic={openaiDiagnostics.get(acc.id)} onMove={moveAccount} onPatch={patchAccount} onDelete={deleteAccount} />;
                   })}
                 </div>
               </div>
@@ -200,8 +213,9 @@ export default function AccountsManager() {
   );
 }
 
-function AccCard({ account, idx, total, onMove, onPatch, onDelete }: {
+function AccCard({ account, idx, total, diagnostic, onMove, onPatch, onDelete }: {
   account: PublicMonitorAccount; idx: number; total: number;
+  diagnostic?: { email: string | null; accountId: string | null; duplicateCount: number };
   onMove: (i: number, d: "up" | "down") => void;
   onPatch: (id: string, p: Record<string, unknown>) => void;
   onDelete: (id: string) => void;
@@ -219,6 +233,15 @@ function AccCard({ account, idx, total, onMove, onPatch, onDelete }: {
           <p className="text-sm text-[var(--text-muted)] mt-0.5 truncate">
             {credentialLabel}
           </p>
+          {account.provider === "openai" && diagnostic && (
+            <div className="mt-1 space-y-0.5">
+              <p className="text-xs text-[var(--text-dim)] truncate">{diagnostic.email || t("accounts.none")}</p>
+              <p className="text-xs text-[var(--text-dim)] truncate">{diagnostic.accountId || t("accounts.none")}</p>
+              {diagnostic.duplicateCount > 1 && (
+                <p className="text-xs text-amber-400">{t("detail.sameAccountWarning")}</p>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <div className="flex flex-col gap-0.5">
