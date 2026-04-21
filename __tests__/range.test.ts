@@ -2,6 +2,16 @@ import { describe, it, expect } from "vitest";
 import { resolveRange, toUtcDayKey } from "@/lib/usage-monitor/range";
 
 describe("resolveRange", () => {
+  function expectCalendarDaySpan(diffMs: number, days: number) {
+    const target = days * 24 * 60 * 60 * 1000;
+    const oneHour = 60 * 60 * 1000;
+
+    // `Date#setDate()` preserves local clock time, so DST boundaries can shift the
+    // millisecond span by one hour even when the calendar-day span is correct.
+    expect(diffMs).toBeGreaterThanOrEqual(target - oneHour - 100);
+    expect(diffMs).toBeLessThanOrEqual(target + oneHour + 100);
+  }
+
   it("returns week preset by default for null input", () => {
     const range = resolveRange(null);
     expect(range.preset).toBe("week");
@@ -24,25 +34,17 @@ describe("resolveRange", () => {
 
   it("day range spans ~1 day", () => {
     const range = resolveRange("day");
-
-    const diffMs = range.end.getTime() - range.start.getTime();
-    // Should be approximately 24 hours (within a small tolerance)
-    expect(diffMs).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 100);
-    expect(diffMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 100);
+    expectCalendarDaySpan(range.end.getTime() - range.start.getTime(), 1);
   });
 
   it("week range spans ~7 days", () => {
     const range = resolveRange("week");
-    const diffMs = range.end.getTime() - range.start.getTime();
-    expect(diffMs).toBeGreaterThanOrEqual(7 * 24 * 60 * 60 * 1000 - 100);
-    expect(diffMs).toBeLessThanOrEqual(7 * 24 * 60 * 60 * 1000 + 100);
+    expectCalendarDaySpan(range.end.getTime() - range.start.getTime(), 7);
   });
 
   it("month range spans ~30 days", () => {
     const range = resolveRange("month");
-    const diffMs = range.end.getTime() - range.start.getTime();
-    expect(diffMs).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 * 1000 - 100);
-    expect(diffMs).toBeLessThanOrEqual(30 * 24 * 60 * 60 * 1000 + 100);
+    expectCalendarDaySpan(range.end.getTime() - range.start.getTime(), 30);
   });
 
   it("start is before end", () => {

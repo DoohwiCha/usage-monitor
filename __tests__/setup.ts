@@ -14,6 +14,9 @@ process.env.MONITOR_ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef0123456789
 export function resetDb(): void {
   const db = getDb();
   db.exec(`
+    DELETE FROM account_sync_sessions;
+    DELETE FROM usage_sampler_runs;
+    DELETE FROM usage_window_samples;
     DELETE FROM usage_snapshots;
     DELETE FROM audit_log;
     DELETE FROM rate_limits;

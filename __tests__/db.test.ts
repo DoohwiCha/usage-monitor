@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveDbPath } from "@/lib/usage-monitor/db";
+import { getDb, resolveDbPath } from "@/lib/usage-monitor/db";
 
 describe("resolveDbPath", () => {
   const originalDbPath = process.env.MONITOR_DB_PATH;
@@ -28,5 +28,11 @@ describe("resolveDbPath", () => {
   it("preserves an absolute override path", () => {
     process.env.MONITOR_DB_PATH = "/tmp/usage-monitor-absolute.db";
     expect(resolveDbPath()).toBe("/tmp/usage-monitor-absolute.db");
+  });
+
+  it("does not keep the retired api_key column in the final accounts schema", () => {
+    const db = getDb();
+    const columns = db.prepare("PRAGMA table_info(accounts)").all() as Array<{ name: string }>;
+    expect(columns.some((column) => column.name === "api_key")).toBe(false);
   });
 });

@@ -62,13 +62,45 @@ describe("updateMonitorAccount", () => {
     expect(account.enabled).toBe(true);
   });
 
-  it("updates apiKey", async () => {
+  it("stores OpenAI auth-store metadata", async () => {
     const { accounts } = await addMonitorAccount({ name: "OpenAI Acct", provider: "openai" });
     const id = accounts[0].id;
 
-    const updated = await updateMonitorAccount(id, { apiKey: "sk-test-12345678" });
+    const updated = await updateMonitorAccount(id, {
+      authMode: "auth_store",
+      authIdentity: "dominic.d.cha@gmail.com",
+      lastSyncedAt: "2026-03-30T00:00:00.000Z",
+      syncSource: "cliproxy_codex",
+      sourcePath: "/Users/hjyeo/.cli-proxy-api/codex-dominic.d.cha@gmail.com-pro.json",
+      sourceAccountId: "acct-123",
+      sourceExpiresAt: "2026-04-30T00:00:00.000Z",
+    });
     const account = updated.accounts.find((a) => a.id === id)!;
-    expect(account.apiKey).toBe("sk-test-12345678");
+    expect(account.authMode).toBe("auth_store");
+    expect(account.authIdentity).toBe("dominic.d.cha@gmail.com");
+    expect(account.syncSource).toBe("cliproxy_codex");
+    expect(account.sourcePath).toBe("/Users/hjyeo/.cli-proxy-api/codex-dominic.d.cha@gmail.com-pro.json");
+    expect(account.sourceAccountId).toBe("acct-123");
+    expect(account.sourceExpiresAt).toBe("2026-04-30T00:00:00.000Z");
+  });
+
+  it("stores local sync auth metadata", async () => {
+    const { accounts } = await addMonitorAccount({ name: "Claude Sync", provider: "claude" });
+    const id = accounts[0].id;
+
+    const updated = await updateMonitorAccount(id, {
+      sessionCookie: "session=abc123",
+      authMode: "local_sync",
+      authIdentity: "user@example.com",
+      lastSyncedAt: "2026-03-30T00:00:00.000Z",
+      syncSource: "claude_cookie",
+    });
+    const account = updated.accounts.find((a) => a.id === id)!;
+    expect(account.sessionCookie).toBe("session=abc123");
+    expect(account.authMode).toBe("local_sync");
+    expect(account.authIdentity).toBe("user@example.com");
+    expect(account.lastSyncedAt).toBe("2026-03-30T00:00:00.000Z");
+    expect(account.syncSource).toBe("claude_cookie");
   });
 
   it("throws for non-existent account id", async () => {
@@ -88,17 +120,27 @@ describe("updateMonitorAccount", () => {
     const { accounts } = await addMonitorAccount({ name: "Switch", provider: "claude", sessionCookie: "old=value", enabled: true });
     const id = accounts[0].id;
 
-    const switchedToOpenAI = await updateMonitorAccount(id, { provider: "openai", apiKey: "sk-test-12345678" });
+    const switchedToOpenAI = await updateMonitorAccount(id, {
+      provider: "openai",
+      authMode: "auth_store",
+      syncSource: "cliproxy_codex",
+      sourcePath: "/Users/hjyeo/.cli-proxy-api/codex-switch@example.com-pro.json",
+      sourceAccountId: "acct-openai",
+    });
     const openaiAccount = switchedToOpenAI.accounts.find((a) => a.id === id)!;
     expect(openaiAccount.provider).toBe("openai");
     expect(openaiAccount.sessionCookie).toBeUndefined();
-    expect(openaiAccount.apiKey).toBe("sk-test-12345678");
+    expect(openaiAccount.authMode).toBe("auth_store");
+    expect(openaiAccount.syncSource).toBe("cliproxy_codex");
+    expect(openaiAccount.sourcePath).toBe("/Users/hjyeo/.cli-proxy-api/codex-switch@example.com-pro.json");
+    expect(openaiAccount.sourceAccountId).toBe("acct-openai");
 
     const switchedBackToClaude = await updateMonitorAccount(id, { provider: "claude", sessionCookie: "new=value" });
     const claudeAccount = switchedBackToClaude.accounts.find((a) => a.id === id)!;
     expect(claudeAccount.provider).toBe("claude");
     expect(claudeAccount.sessionCookie).toBe("new=value");
-    expect(claudeAccount.apiKey).toBeUndefined();
+    expect(claudeAccount.sourcePath).toBeUndefined();
+    expect(claudeAccount.sourceAccountId).toBeUndefined();
   });
 });
 
@@ -162,17 +204,21 @@ describe("toPublicAccount", () => {
     expect("sessionCookie" in pub).toBe(false);
   });
 
-  it("masks api key", async () => {
+  it("does not expose unsupported OpenAI API key fields", async () => {
     const { accounts } = await addMonitorAccount({
       name: "OpenAI",
       provider: "openai",
-      apiKey: "sk-verylongapikey1234",
+      authMode: "auth_store",
+      syncSource: "cliproxy_codex",
+      sourcePath: "/Users/hjyeo/.cli-proxy-api/codex-openai@example.com-pro.json",
     });
     const pub = toPublicAccount(accounts[0]);
 
-    expect(pub.hasApiKey).toBe(true);
-    expect(pub.apiKeyMasked).toMatch(/^\*{4}/);
-    expect(pub.apiKeyMasked).not.toContain("verylongapikey");
+    expect(pub.authMode).toBe("auth_store");
+    expect(pub.syncSource).toBe("cliproxy_codex");
+    expect(pub.sourcePath).toBe("/Users/hjyeo/.cli-proxy-api/codex-openai@example.com-pro.json");
+    expect("hasApiKey" in pub).toBe(false);
+    expect("apiKeyMasked" in pub).toBe(false);
   });
 
   it("sets hasSessionCookie=false when no cookie set", async () => {
@@ -180,6 +226,25 @@ describe("toPublicAccount", () => {
     const pub = toPublicAccount(accounts[0]);
     expect(pub.hasSessionCookie).toBe(false);
     expect(pub.sessionCookieMasked).toBe("");
+  });
+
+  it("exposes auth metadata without leaking secrets", async () => {
+    const { accounts } = await addMonitorAccount({
+      name: "Synced",
+      provider: "claude",
+      sessionCookie: "sessionKey=supersecretvalue",
+      authMode: "local_sync",
+      authIdentity: "synced@example.com",
+      lastSyncedAt: "2026-03-30T00:00:00.000Z",
+      syncSource: "claude_cookie",
+    });
+    const pub = toPublicAccount(accounts[0]);
+
+    expect(pub.authMode).toBe("local_sync");
+    expect(pub.authIdentity).toBe("synced@example.com");
+    expect(pub.lastSyncedAt).toBe("2026-03-30T00:00:00.000Z");
+    expect(pub.syncSource).toBe("claude_cookie");
+    expect("sessionCookie" in pub).toBe(false);
   });
 });
 
