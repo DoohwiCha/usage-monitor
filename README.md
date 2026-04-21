@@ -13,7 +13,7 @@ Built with Next.js 16, React 19, TypeScript, Tailwind CSS v4, and Framer Motion.
 - **Multi-Account Support** — Monitor up to 12 Claude and OpenAI accounts simultaneously
 - **Real-time Usage Tracking** — Auto-refresh every 60 seconds with background updates
 - **Rate Limit Monitoring** — Visualize Claude usage windows (5h, 7d) with progress bars
-- **Browser Login** — One-click Claude login via Playwright (auto-saves cookies) plus ChatGPT subscription import for OpenAI accounts
+- **Local Sync** — Run browser login on your own GUI machine, then upload Claude cookies to the remote dashboard
 - **Multi-User Auth** — Scrypt-hashed passwords, role-based access (admin/viewer), server-side sessions
 - **Dark / Light Theme** — Beautiful glass-morphism UI with theme toggle
 - **6 Languages** — English, Korean, Japanese, Chinese, Spanish, Portuguese
@@ -53,7 +53,7 @@ Add, reorder, enable/disable, and delete accounts.
 
 ### Account Detail
 
-Per-account settings, browser login, connection testing, and daily usage table.
+Per-account settings, local sync, connection testing, and daily usage table.
 
 ![Account Detail](docs/screenshots/07-account-detail.png)
 
@@ -71,7 +71,7 @@ All UI text is translated. Example in Japanese:
 
 - **Node.js** 20+
 - **npm** 10+
-- (Optional) **Playwright** for browser-based login
+- (Optional) **Playwright** on the operator's local GUI machine for local sync
 
 ### Installation
 
@@ -95,7 +95,7 @@ cp .env.example .env.local
 | `MONITOR_ADMIN_PASS` | Initial admin password (min 8 chars) | **Yes** |
 | `MONITOR_ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM (use `openssl rand -hex 32`) | **Yes** |
 | `MONITOR_DB_PATH` | Override SQLite database file path (advanced / test) | No |
-| `MONITOR_BROWSER_PROFILE_ROOT` | Override persistent Playwright browser-profile root | No |
+| `MONITOR_BROWSER_PROFILE_ROOT` | Override persistent Playwright browser-profile root used by legacy/server-side browser flows | No |
 | `MONITOR_COOKIE_SECURE` | Override login cookie `secure` flag: `true` or `false` (default: auto by request protocol) | No |
 | `TRUST_PROXY` | Trust proxy IP headers for login rate-limit key (`true` to enable) | No |
 | `TRUST_PROXY_SHARED_SECRET` | Shared secret required to trust forwarded IP headers (`x-monitor-proxy-secret`) | No (recommended with `TRUST_PROXY=true`) |
@@ -111,9 +111,9 @@ openssl rand -hex 32  # for MONITOR_ENCRYPTION_KEY
 
 ### Running on Another PC (Troubleshooting)
 
-- If you moved `data/usage-monitor.db` to another machine, reuse the same `MONITOR_ENCRYPTION_KEY` value from the original machine. A different key cannot decrypt saved cookies/API keys.
+- If you moved `data/usage-monitor.db` to another machine, reuse the same `MONITOR_ENCRYPTION_KEY` value from the original machine. A different key cannot decrypt saved secrets.
 - If usage or connection checks return an encryption-key mismatch error, set the original `MONITOR_ENCRYPTION_KEY` and restart the server.
-- Browser login profiles are stored outside the project tree by default under `~/.usage-monitor/browser-profiles`. Override with `MONITOR_BROWSER_PROFILE_ROOT` if needed.
+- Browser login profiles are stored outside the project tree by default under `~/.usage-monitor/browser-profiles`. Override with `MONITOR_BROWSER_PROFILE_ROOT` if needed for legacy/server-side automation only; the new local sync helper uses a profile directory on the operator's machine.
 - To move the SQLite database, set `MONITOR_DB_PATH` to the target file path before starting the server.
 - Login session cookie `secure` now follows request protocol automatically (`https` => secure, `http` => non-secure).
 - If reverse proxy/TLS setup needs explicit behavior, set `MONITOR_COOKIE_SECURE=true` or `MONITOR_COOKIE_SECURE=false`.
@@ -141,16 +141,98 @@ If you have an existing `data/usage-monitor.json` from a previous version:
 npx tsx scripts/migrate-json-to-sqlite.ts
 ```
 
-### Browser Login (Optional)
+This migration only imports Claude cookie-based accounts. Unsupported legacy OpenAI JSON rows are skipped.
 
-To use browser-assisted login:
+### Claude Local Sync
+
+Use the local sync helper from your own GUI machine, not from the headless Mac mini or an SSH shell attached to it.
 
 ```bash
 npx playwright install chromium
+npx tsx scripts/local-sync.ts claude --server https://usage-monitor.hjyeo.com --account-id <account-id>
 ```
 
-- **Claude** browser login saves session cookies used for Claude usage collection.
-- **OpenAI** browser login imports subscription metadata only. Actual OpenAI usage collection uses an **Admin API key** or local `~/.omx/metrics.json`.
+- The helper opens a local browser, waits for you to log in, then prompts for the sync token shown in the usage-monitor UI before uploading the Claude session cookie.
+- **Claude** local sync saves session cookies used for Claude usage collection.
+- OpenAI / Codex monitoring now uses CLIProxyAPI auth-store import instead of browser login, local metrics upload, or API-key setup.
+
+### Recommended production model
+
+For this deployment, the recommended long-term operating model is:
+
+- **Claude** → `manual_cookie`
+  - Sign in to `claude.ai` in a normal browser
+  - Complete Cloudflare verification there
+  - Paste the cookie header into usage-monitor
+- **OpenAI / Codex** → `CLIProxyAPI auth store`
+  - Import server-local `~/.cli-proxy-api/codex-*.json` accounts
+  - usage-monitor reads those auth files directly on the Mac mini server
+
+This split is intentional:
+
+- Claude auth-store access works, but the upstream OAuth usage endpoint can be rate-limited more aggressively during interactive dashboard use.
+- Codex/OpenAI auth-store access is the best multi-account source on this server because it is truly account-scoped.
+
+### CLIProxyAPI auth store import (recommended for Codex multi-account)
+
+On this server, usage-monitor can read account files directly from the local CLIProxyAPI auth store:
+
+- Default auth store path: `~/.cli-proxy-api`
+- OpenAI / Codex files: `codex-*.json`
+- Claude files: `claude-*.json`
+
+This is the recommended path for **Codex multi-account monitoring** because it keeps all account credentials and usage collection on the same Mac mini server.
+
+How it works:
+
+1. usage-monitor scans `~/.cli-proxy-api`
+2. The Accounts page shows detected CLIProxyAPI auth-store accounts
+3. Click **Import** to create a file-backed usage-monitor account
+4. usage-monitor reads that auth file on demand and fetches usage directly from the provider
+
+Notes:
+
+- For **OpenAI / Codex**, usage-monitor uses the auth file's `access_token` + `account_id` to call ChatGPT/Codex usage endpoints directly.
+- For **Claude**, usage-monitor can also read `claude-*.json` auth files directly, but the recommended production path remains the manual cookie flow for better operational stability.
+- Auth-store imports do **not** copy the access token into the usage-monitor DB. The DB stores only the source metadata (file path, identity, expiry, etc.), and usage-monitor reads the file when needed.
+
+### Claude Manual Cookie Fallback
+
+If Claude local sync gets stuck on Cloudflare security verification, use the manual cookie fallback instead.
+
+1. Open your normal Chrome or Edge browser and sign in to `https://claude.ai` directly.
+2. Complete any Cloudflare verification in the normal browser first.
+3. Open DevTools (`F12`) → **Application** → **Storage** → **Cookies** → `https://claude.ai`.
+4. Build a cookie header string in this format:
+
+```text
+name1=value1; name2=value2; name3=value3
+```
+
+Start with these cookies:
+
+- `sessionKey`
+- `cf_clearance`
+- `lastActiveOrg`
+
+If the first attempt does not connect, add these too:
+
+- `routingHint`
+- `activitySessionId`
+- `anthropic-device-id`
+
+5. In usage-monitor, open the target Claude account detail page.
+6. Expand **Manual cookie input**.
+7. Paste the cookie header string.
+8. Click **Save Settings**.
+9. Click **Test Connection**.
+
+Notes:
+
+- `sessionKey` is the Claude session itself.
+- `cf_clearance` is usually required after Cloudflare verification.
+- Prefer cookies from `.claude.ai` / `claude.ai`. You usually do not need unrelated analytics cookies.
+- Treat the pasted cookie string like a password. Rotate or refresh the Claude session if you exposed it anywhere unsafe.
 
 ### Run Tests
 
@@ -231,7 +313,7 @@ usage-monitor/
 | Authentication | Multi-user with scrypt password hashing |
 | Sessions | Server-side SQLite sessions (12h TTL) with revocation support |
 | Rate Limiting | SQLite-backed sliding window (5 login attempts / 15 min) |
-| Encryption | AES-256-GCM for stored secrets (cookies, API keys) |
+| Encryption | AES-256-GCM for stored secrets (cookies, auth metadata) |
 | CSRF | Origin + Referer header validation (deny when absent) |
 | Headers | CSP, HSTS, X-Frame-Options DENY, X-Content-Type nosniff, no-cache on API |
 | Browser Pool | Max 2 concurrent Playwright instances to prevent resource exhaustion |
@@ -244,8 +326,8 @@ usage-monitor/
 
 | Provider | Auth Method | Data Source |
 |----------|------------|-------------|
-| **Claude** | Browser login (Playwright) or manual cookie | claude.ai internal API (rate limits, utilization) |
-| **OpenAI** | Admin API Key (`sk-admin-...`) or browser login | OpenAI Admin API (costs, requests, tokens) |
+| **Claude** | Local helper sync on your GUI machine or manual cookie fallback | claude.ai internal API (rate limits, utilization) |
+| **OpenAI** | CLIProxyAPI Codex auth-store import | ChatGPT/Codex usage windows (`5h`, `7d`) via account-scoped auth files |
 
 ---
 
