@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hjyeo.usage-monitor-history-sampler</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/hjyeo/usage-monitor/scripts/run-history-sampler.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/hjyeo/usage-monitor</string>
+
+  <key>LimitLoadToSessionType</key>
+  <string>Background</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/hjyeo/srv/logs/usage-monitor-history-sampler.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/hjyeo/srv/logs/usage-monitor-history-sampler.error.log</string>
+</dict>
+</plist>

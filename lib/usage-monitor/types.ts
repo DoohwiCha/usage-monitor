@@ -1,4 +1,21 @@
 export type ProviderType = "claude" | "openai";
+export type AccountAuthMode = "manual_cookie" | "local_sync" | "auth_store";
+export type AccountSyncSource =
+  | "manual_cookie"
+  | "claude_cookie"
+  | "cliproxy_codex"
+  | "cliproxy_claude";
+
+export type WindowKey =
+  | "five_hour"
+  | "seven_day"
+  | "seven_day_opus"
+  | "seven_day_sonnet"
+  | "seven_day_cowork"
+  | "seven_day_oauth"
+  | "other";
+export type UsageSampleKind = "observed" | "carried_forward";
+export type HistoryRangePreset = "12h" | "24h" | "7d" | "30d" | "all";
 
 export interface SubscriptionInfo {
   plan?: string;
@@ -13,10 +30,14 @@ export interface MonitorAccount {
   enabled: boolean;
   /** Claude: browser session cookie (key1=value1; key2=value2) */
   sessionCookie?: string;
-  /** OpenAI: Admin API Key */
-  apiKey?: string;
-  /** OpenAI: Organization ID */
   organizationId?: string;
+  authMode?: AccountAuthMode;
+  authIdentity?: string;
+  lastSyncedAt?: string;
+  syncSource?: AccountSyncSource;
+  sourcePath?: string;
+  sourceAccountId?: string;
+  sourceExpiresAt?: string;
   /** Subscription/plan info (extracted during browser login) */
   subscriptionInfo?: SubscriptionInfo | null;
   createdAt: string;
@@ -37,9 +58,14 @@ export interface PublicMonitorAccount {
   enabled: boolean;
   hasSessionCookie: boolean;
   sessionCookieMasked: string;
-  hasApiKey: boolean;
-  apiKeyMasked: string;
   organizationId?: string;
+  authMode?: AccountAuthMode;
+  authIdentity?: string;
+  lastSyncedAt?: string;
+  syncSource?: AccountSyncSource;
+  sourcePath?: string;
+  sourceAccountId?: string;
+  sourceExpiresAt?: string;
   subscriptionInfo?: SubscriptionInfo | null;
   createdAt: string;
   updatedAt: string;
@@ -67,23 +93,14 @@ export interface UsagePoint {
 export type UsageStatus = "ok" | "disabled" | "not_configured" | "pending" | "error";
 
 export interface UtilizationWindow {
-  label: string;       // "5h", "7d", "wk" etc.
-  utilization: number; // 0–100
+  key: WindowKey;
+  label: string;
+  utilization: number; // raw percent, 0–100
   resetsAt: string | null;
-}
-
-export interface CodexMetrics {
-  totalTurns: number;
-  sessionTurns: number;
-  sessionInputTokens: number;
-  sessionOutputTokens: number;
-  sessionTotalTokens: number;
-  lastActivity: string | null;
 }
 
 export interface ProviderUsageInfo {
   windows: UtilizationWindow[];
-  sourceScope?: "account" | "shared_local";
   accountIdentity?: {
     email: string | null;
     accountId: string | null;
@@ -99,7 +116,6 @@ export interface ProviderUsageInfo {
     usedCredits: number;
     monthlyLimit: number | null;
   };
-  codexMetrics?: CodexMetrics;
 }
 
 export interface AccountUsageReport {
@@ -132,4 +148,37 @@ export interface UsageOverviewResponse {
     fetchedAt: string;
   };
   accounts: AccountUsageReport[];
+}
+
+export interface UsageHistoryPoint {
+  bucketStart: string;
+  utilization: number;
+  resetsAt: string | null;
+  sampleKind: UsageSampleKind;
+}
+
+export interface AccountHistorySeries {
+  accountId: string;
+  accountName: string;
+  provider: ProviderType;
+  windowKey: WindowKey;
+  points: UsageHistoryPoint[];
+}
+
+export interface ResetMarker {
+  accountId: string;
+  accountName: string;
+  provider: ProviderType;
+  at: string;
+}
+
+export interface UsageHistoryResponse {
+  range: {
+    preset: HistoryRangePreset;
+    startIso: string;
+    endIso: string;
+  };
+  series: AccountHistorySeries[];
+  // X-axis reset annotations are intentionally the 5-hour window resets only.
+  resetMarkers: ResetMarker[];
 }

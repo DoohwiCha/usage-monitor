@@ -1,5 +1,7 @@
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
+import { revokeAccountSyncSessionsForAccount } from "@/lib/usage-monitor/account-sync";
 import { ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, updateMonitorAccount, readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
+import { deleteUsageSnapshot } from "@/lib/usage-monitor/usage-adapters";
 import { resolveBrowserProfilePath } from "@/lib/usage-monitor/browser-profile-path";
 import { secureJson } from "@/lib/usage-monitor/response";
 import { logger } from "@/lib/usage-monitor/logger";
@@ -26,11 +28,20 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     // Clear credentials
-    await updateMonitorAccount(id, {
+    await updateMonitorAccount(id, ({
       sessionCookie: "",
+      organizationId: "",
+      authMode: "",
+      authIdentity: "",
+      lastSyncedAt: "",
+      syncSource: "",
+      sourcePath: "",
+      sourceAccountId: "",
+      sourceExpiresAt: "",
       subscriptionInfo: null,
-      ...(account.provider === "openai" ? { apiKey: "", organizationId: "" } : {}),
-    });
+    } as unknown) as Parameters<typeof updateMonitorAccount>[1]);
+    revokeAccountSyncSessionsForAccount(id);
+    deleteUsageSnapshot(id);
 
     // Remove browser profile directory
     const providers: Array<"claude" | "openai"> = [account.provider];

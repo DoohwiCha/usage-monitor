@@ -14,7 +14,6 @@ interface JsonAccount {
   provider: string;
   enabled: boolean;
   sessionCookie?: string;
-  apiKey?: string;
   organizationId?: string;
   subscriptionInfo?: Record<string, unknown>;
   createdAt: string;
@@ -48,31 +47,48 @@ async function main() {
   }
 
   const insert = db.prepare(`
-    INSERT INTO accounts (id, name, provider, enabled, session_cookie, api_key, organization_id, subscription_info, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO accounts (
+      id, name, provider, enabled, session_cookie, organization_id,
+      auth_mode, last_synced_at, sync_source, subscription_info, sort_order, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
+  let migratedCount = 0;
+  let skippedOpenAICount = 0;
   const migrate = db.transaction(() => {
     for (let i = 0; i < config.accounts.length; i++) {
       const acct = config.accounts[i];
+      if ((acct.provider || "claude") === "openai") {
+        skippedOpenAICount += 1;
+        continue;
+      }
+      const sessionCookie = acct.sessionCookie || null;
+      const stamp = acct.updatedAt || acct.createdAt || new Date().toISOString();
       insert.run(
         acct.id,
         acct.name || "Account",
-        acct.provider || "claude",
+        "claude",
         acct.enabled ? 1 : 0,
-        acct.sessionCookie || null,
-        acct.apiKey || null,
+        sessionCookie,
         acct.organizationId || null,
+        sessionCookie ? "manual_cookie" : null,
+        sessionCookie ? stamp : null,
+        sessionCookie ? "manual_cookie" : null,
         acct.subscriptionInfo ? JSON.stringify(acct.subscriptionInfo) : null,
-        i,
+        migratedCount,
         acct.createdAt || new Date().toISOString(),
-        acct.updatedAt || new Date().toISOString(),
+        stamp,
       );
+      migratedCount += 1;
     }
   });
 
   migrate();
-  console.log(`Migrated ${config.accounts.length} accounts from JSON to SQLite.`);
+  console.log(`Migrated ${migratedCount} Claude accounts from JSON to SQLite.`);
+  if (skippedOpenAICount > 0) {
+    console.log(`Skipped ${skippedOpenAICount} unsupported legacy OpenAI accounts from JSON.`);
+  }
 
   const backupPath = JSON_PATH + ".bak";
   await fs.rename(JSON_PATH, backupPath);

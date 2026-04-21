@@ -1,5 +1,4 @@
-import { addMonitorAccount, ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount, updateMonitorAccount } from "@/lib/usage-monitor/store";
-import { fetchOpenAIIdentity } from "@/lib/usage-monitor/usage-adapters";
+import { addMonitorAccount, ENCRYPTION_KEY_MISMATCH_ERROR, isEncryptionKeyMismatchError, readMonitorConfig, toPublicAccount } from "@/lib/usage-monitor/store";
 import { ensureApiAdmin, verifyCsrfOrigin } from "@/lib/usage-monitor/api-auth";
 import type { ProviderType } from "@/lib/usage-monitor/types";
 import { secureJson } from "@/lib/usage-monitor/response";
@@ -12,8 +11,7 @@ const CLIENT_ADD_ACCOUNT_ERRORS = new Set([
   "Maximum 12 accounts allowed.",
   "Account name must be 200 characters or less.",
   "Session cookie must be 20,000 characters or less.",
-  "API key must be 500 characters or less.",
-  "Organization ID must be 500 characters or less.",
+  "Auth identity must be 500 characters or less.",
   "MONITOR_ENCRYPTION_KEY must be set.",
 ]);
 
@@ -68,28 +66,27 @@ export async function POST(request: Request) {
   }
 
   try {
+    const sessionCookie = provider === "claude" ? String(body.sessionCookie || "") : "";
+    if (provider === "openai") {
+      return secureJson(
+        { ok: false, error: "OpenAI accounts must be imported from the CLIProxyAPI Codex auth store." },
+        { status: 400 },
+      );
+    }
+
     const config = await addMonitorAccount({
       name: String(body.name || ""),
       provider,
       enabled: parseBooleanInput(body.enabled, false),
-      sessionCookie: provider === "claude" ? String(body.sessionCookie || "") : undefined,
-      apiKey: provider === "openai" ? String(body.apiKey || "") : undefined,
-      organizationId: provider === "openai" ? String(body.organizationId || "") : undefined,
+      sessionCookie: provider === "claude" ? sessionCookie : undefined,
+      authMode: sessionCookie.trim()
+        ? "manual_cookie"
+        : undefined,
+      lastSyncedAt: sessionCookie.trim() ? new Date().toISOString() : undefined,
+      syncSource: sessionCookie.trim()
+        ? "manual_cookie"
+        : undefined,
     });
-
-    // Auto-fetch identity for OpenAI accounts with API key (like Claude browser login)
-    if (provider === "openai" && body.apiKey && (!body.name || !String(body.name).trim())) {
-      try {
-        const newAccount = config.accounts[config.accounts.length - 1];
-        if (newAccount) {
-          const identity = await fetchOpenAIIdentity(newAccount);
-          if (identity?.email) {
-            const updated = await updateMonitorAccount(newAccount.id, { name: identity.email });
-            return secureJson({ ok: true, accounts: updated.accounts.map(toPublicAccount) });
-          }
-        }
-      } catch { /* identity fetch is best-effort */ }
-    }
 
     return secureJson({ ok: true, accounts: config.accounts.map(toPublicAccount) });
   } catch (error) {

@@ -1,11 +1,23 @@
 import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import type { MonitorAccount, MonitorConfig, ProviderType, PublicMonitorAccount, SubscriptionInfo } from "@/lib/usage-monitor/types";
+import type {
+  AccountAuthMode,
+  AccountSyncSource,
+  MonitorAccount,
+  MonitorConfig,
+  ProviderType,
+  PublicMonitorAccount,
+  SubscriptionInfo,
+} from "@/lib/usage-monitor/types";
 import { getDb } from "@/lib/usage-monitor/db";
 
 const MAX_ACCOUNTS = 12;
 export const ENCRYPTION_KEY_MISMATCH_ERROR =
   "Failed to decrypt stored secret. MONITOR_ENCRYPTION_KEY is missing or does not match the key used to encrypt existing account data.";
 const ENCRYPTION_KEY_REQUIRED_ERROR = "MONITOR_ENCRYPTION_KEY must be set.";
+type AccountMutation = Partial<MonitorAccount> & {
+  authMode?: AccountAuthMode | "";
+  syncSource?: AccountSyncSource | "";
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -76,11 +88,14 @@ function validateAccountInput(input: Partial<MonitorAccount>): void {
   if (input.sessionCookie !== undefined && input.sessionCookie.length > 20000) {
     throw new Error("Session cookie must be 20,000 characters or less.");
   }
-  if (input.apiKey !== undefined && input.apiKey.length > 500) {
-    throw new Error("API key must be 500 characters or less.");
+  if (input.authIdentity !== undefined && input.authIdentity.length > 500) {
+    throw new Error("Auth identity must be 500 characters or less.");
   }
-  if (input.organizationId !== undefined && input.organizationId.length > 500) {
-    throw new Error("Organization ID must be 500 characters or less.");
+  if (input.sourcePath !== undefined && input.sourcePath.length > 2000) {
+    throw new Error("Source path must be 2,000 characters or less.");
+  }
+  if (input.sourceAccountId !== undefined && input.sourceAccountId.length > 500) {
+    throw new Error("Source account ID must be 500 characters or less.");
   }
 }
 
@@ -92,8 +107,14 @@ interface AccountRow {
   provider: string;
   enabled: number;
   session_cookie: string | null;
-  api_key: string | null;
   organization_id: string | null;
+  auth_mode: string | null;
+  auth_identity: string | null;
+  last_synced_at: string | null;
+  sync_source: string | null;
+  source_path: string | null;
+  source_account_id: string | null;
+  source_expires_at: string | null;
   subscription_info: string | null;
   sort_order: number;
   created_at: string;
@@ -104,7 +125,6 @@ interface AccountRow {
 function rowToAccount(row: AccountRow): MonitorAccount {
   const provider = row.provider as ProviderType;
   const sessionCookie = row.session_cookie ? decryptSecret(row.session_cookie).trim() || undefined : undefined;
-  const apiKey = row.api_key ? decryptSecret(row.api_key).trim() || undefined : undefined;
 
   return {
     id: row.id,
@@ -112,8 +132,14 @@ function rowToAccount(row: AccountRow): MonitorAccount {
     provider,
     enabled: row.enabled === 1,
     sessionCookie: provider === "claude" ? sessionCookie : undefined,
-    apiKey: provider === "openai" ? apiKey : undefined,
     organizationId: row.organization_id?.trim() || undefined,
+    authMode: row.auth_mode?.trim() as AccountAuthMode | undefined,
+    authIdentity: row.auth_identity?.trim() || undefined,
+    lastSyncedAt: row.last_synced_at || undefined,
+    syncSource: row.sync_source?.trim() as AccountSyncSource | undefined,
+    sourcePath: row.source_path?.trim() || undefined,
+    sourceAccountId: row.source_account_id?.trim() || undefined,
+    sourceExpiresAt: row.source_expires_at || undefined,
     subscriptionInfo: row.subscription_info ? JSON.parse(row.subscription_info) as SubscriptionInfo : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -130,9 +156,14 @@ export function toPublicAccount(account: MonitorAccount): PublicMonitorAccount {
     enabled: account.enabled,
     hasSessionCookie: Boolean(account.sessionCookie),
     sessionCookieMasked: maskSecret(account.sessionCookie || ""),
-    hasApiKey: Boolean(account.apiKey),
-    apiKeyMasked: maskSecret(account.apiKey || ""),
     organizationId: account.organizationId,
+    authMode: account.authMode,
+    authIdentity: account.authIdentity,
+    lastSyncedAt: account.lastSyncedAt,
+    syncSource: account.syncSource,
+    sourcePath: account.sourcePath,
+    sourceAccountId: account.sourceAccountId,
+    sourceExpiresAt: account.sourceExpiresAt,
     subscriptionInfo: account.subscriptionInfo,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
@@ -158,7 +189,7 @@ export async function writeMonitorConfig(config: MonitorConfig): Promise<void> {
   // This function is kept for backward compatibility with any callers.
 }
 
-export async function addMonitorAccount(input: Partial<MonitorAccount>): Promise<MonitorConfig> {
+export async function addMonitorAccount(input: AccountMutation): Promise<MonitorConfig> {
   validateAccountInput(input);
 
   const db = getDb();
@@ -170,19 +201,37 @@ export async function addMonitorAccount(input: Partial<MonitorAccount>): Promise
   const stamp = nowIso();
   const id = randomUUID();
   const maxOrder = (db.prepare("SELECT COALESCE(MAX(sort_order), -1) as mx FROM accounts").get() as { mx: number }).mx;
+  const provider = (input.provider as ProviderType) || "claude";
+  const sessionCookie = input.sessionCookie?.trim() || "";
+  const authMode = input.authMode
+    || (provider === "claude" && sessionCookie ? "manual_cookie" : undefined);
+  const syncSource = input.syncSource
+    || (provider === "claude" && sessionCookie ? "manual_cookie" : undefined);
+  const lastSyncedAt = input.lastSyncedAt
+    || (sessionCookie ? stamp : undefined);
 
   const insertAccount = db.transaction(() => {
     db.prepare(`
-      INSERT INTO accounts (id, name, provider, enabled, session_cookie, api_key, organization_id, subscription_info, sort_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO accounts (
+        id, name, provider, enabled, session_cookie, organization_id,
+        auth_mode, auth_identity, last_synced_at, sync_source, source_path, source_account_id, source_expires_at, subscription_info,
+        sort_order, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       input.name?.trim() || `Account ${count + 1}`,
-      (input.provider as ProviderType) || "claude",
+      provider,
       input.enabled ? 1 : 0,
-      input.sessionCookie?.trim() ? encryptSecret(input.sessionCookie.trim()) : null,
-      input.apiKey?.trim() ? encryptSecret(input.apiKey.trim()) : null,
-      input.organizationId?.trim() || null,
+      sessionCookie ? encryptSecret(sessionCookie) : null,
+      null,
+      authMode || null,
+      input.authIdentity?.trim() || null,
+      lastSyncedAt || null,
+      syncSource || null,
+      input.sourcePath?.trim() || null,
+      input.sourceAccountId?.trim() || null,
+      input.sourceExpiresAt || null,
       input.subscriptionInfo ? JSON.stringify(input.subscriptionInfo) : null,
       maxOrder + 1,
       stamp,
@@ -198,7 +247,7 @@ export async function addMonitorAccount(input: Partial<MonitorAccount>): Promise
   return readMonitorConfig();
 }
 
-export async function updateMonitorAccount(id: string, updates: Partial<MonitorAccount>): Promise<MonitorConfig> {
+export async function updateMonitorAccount(id: string, updates: AccountMutation): Promise<MonitorConfig> {
   validateAccountInput(updates);
 
   const db = getDb();
@@ -226,10 +275,6 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
     setClauses.push("session_cookie = ?");
     values.push(null);
   }
-  if (updates.provider === "claude" && updates.apiKey === undefined) {
-    setClauses.push("api_key = ?");
-    values.push(null);
-  }
   if (updates.enabled !== undefined) {
     setClauses.push("enabled = ?");
     values.push(updates.enabled ? 1 : 0);
@@ -238,19 +283,86 @@ export async function updateMonitorAccount(id: string, updates: Partial<MonitorA
     setClauses.push("session_cookie = ?");
     const trimmed = updates.sessionCookie.trim();
     values.push(targetProvider === "claude" && trimmed ? encryptSecret(trimmed) : null);
+    if (updates.authMode === undefined) {
+      setClauses.push("auth_mode = ?");
+      values.push(targetProvider === "claude" && trimmed ? "manual_cookie" : null);
+    }
+    if (updates.syncSource === undefined) {
+      setClauses.push("sync_source = ?");
+      values.push(targetProvider === "claude" && trimmed ? "manual_cookie" : null);
+    }
+    if (updates.lastSyncedAt === undefined) {
+      setClauses.push("last_synced_at = ?");
+      values.push(targetProvider === "claude" && trimmed ? stamp : null);
+    }
+    if (!trimmed && updates.authIdentity === undefined) {
+      setClauses.push("auth_identity = ?");
+      values.push(null);
+    }
   }
-  if (updates.apiKey !== undefined) {
-    setClauses.push("api_key = ?");
-    const trimmed = updates.apiKey.trim();
-    values.push(targetProvider === "openai" && trimmed ? encryptSecret(trimmed) : null);
+  if (updates.authMode !== undefined) {
+    setClauses.push("auth_mode = ?");
+    values.push(updates.authMode || null);
   }
-  if (updates.organizationId !== undefined) {
-    setClauses.push("organization_id = ?");
-    values.push(updates.organizationId.trim() || null);
+  if (updates.authIdentity !== undefined) {
+    setClauses.push("auth_identity = ?");
+    values.push(updates.authIdentity.trim() || null);
+  }
+  if (updates.lastSyncedAt !== undefined) {
+    setClauses.push("last_synced_at = ?");
+    values.push(updates.lastSyncedAt || null);
+  }
+  if (updates.syncSource !== undefined) {
+    setClauses.push("sync_source = ?");
+    values.push(updates.syncSource || null);
+  }
+  if (updates.sourcePath !== undefined) {
+    setClauses.push("source_path = ?");
+    values.push(updates.sourcePath.trim() || null);
+  }
+  if (updates.sourceAccountId !== undefined) {
+    setClauses.push("source_account_id = ?");
+    values.push(updates.sourceAccountId.trim() || null);
+  }
+  if (updates.sourceExpiresAt !== undefined) {
+    setClauses.push("source_expires_at = ?");
+    values.push(updates.sourceExpiresAt || null);
   }
   if (updates.subscriptionInfo !== undefined) {
     setClauses.push("subscription_info = ?");
     values.push(updates.subscriptionInfo ? JSON.stringify(updates.subscriptionInfo) : null);
+  }
+  if (updates.provider !== undefined && updates.provider !== current.provider) {
+    setClauses.push("organization_id = ?");
+    values.push(null);
+    if (updates.authMode === undefined) {
+      setClauses.push("auth_mode = ?");
+      values.push(null);
+    }
+    if (updates.authIdentity === undefined) {
+      setClauses.push("auth_identity = ?");
+      values.push(null);
+    }
+    if (updates.lastSyncedAt === undefined) {
+      setClauses.push("last_synced_at = ?");
+      values.push(null);
+    }
+    if (updates.syncSource === undefined) {
+      setClauses.push("sync_source = ?");
+      values.push(null);
+    }
+    if (updates.sourcePath === undefined) {
+      setClauses.push("source_path = ?");
+      values.push(null);
+    }
+    if (updates.sourceAccountId === undefined) {
+      setClauses.push("source_account_id = ?");
+      values.push(null);
+    }
+    if (updates.sourceExpiresAt === undefined) {
+      setClauses.push("source_expires_at = ?");
+      values.push(null);
+    }
   }
 
   if (setClauses.length > 0) {

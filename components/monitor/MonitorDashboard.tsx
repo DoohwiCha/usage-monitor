@@ -3,13 +3,30 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
-import type { AccountUsageReport, UsageOverviewResponse, CodexMetrics } from "@/lib/usage-monitor/types";
-import { collapseSharedLocalOpenAIAccounts } from "@/lib/usage-monitor/display";
-import ThemeToggle from "./ThemeToggle";
+import { AnimatePresence, motion } from "framer-motion";
+
+import type {
+  AccountUsageReport,
+  HistoryRangePreset,
+  UsageHistoryResponse,
+  UsageOverviewResponse,
+  WindowKey,
+} from "@/lib/usage-monitor/types";
 import { useTranslation } from "@/lib/i18n/context";
-import { type TranslationKey } from "@/lib/i18n/translations";
+import type { TranslationKey } from "@/lib/i18n/translations";
 import LanguageSelector from "./LanguageSelector";
+import ThemeToggle from "./ThemeToggle";
+import UsageHistoryChart from "./UsageHistoryChart";
+
+const HISTORY_RANGES: HistoryRangePreset[] = ["12h", "24h", "7d", "30d", "all"];
+
+function historyRangeLabel(range: HistoryRangePreset): string {
+  if (range === "12h") return "12h";
+  if (range === "24h") return "24h";
+  if (range === "7d") return "7d";
+  if (range === "30d") return "30d";
+  return "All";
+}
 
 function countDisplay(count: number, t: (key: TranslationKey) => string): string {
   const unit = t("countUnit");
@@ -67,69 +84,89 @@ export default function MonitorDashboard({ username, role }: { username: string;
   const { t, locale } = useTranslation();
   const tRef = useRef(t);
   tRef.current = t;
+
   const relativeNowMs = useRelativeNowMs();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<UsageOverviewResponse | null>(null);
+  const [history, setHistory] = useState<UsageHistoryResponse | null>(null);
+  const [historyRange, setHistoryRange] = useState<HistoryRangePreset>("12h");
+  const [historyEmphasis, setHistoryEmphasis] = useState<WindowKey>("five_hour");
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
-  const loadUsage = useCallback(async (background = false) => {
-    if (!background) setLoading(true);
+  const loadDashboard = useCallback(async (background = false) => {
+    if (!background) {
+      setLoading(true);
+    }
     setError(null);
     try {
-      const response = await fetch("/api/monitor/usage?range=month", { cache: "no-store" });
-      if (response.status === 401) {
+      const [usageResponse, historyResponse] = await Promise.all([
+        fetch("/api/monitor/usage?range=month", { cache: "no-store" }),
+        fetch(`/api/monitor/history?range=${historyRange}`, { cache: "no-store" }),
+      ]);
+      if (usageResponse.status === 401 || historyResponse.status === 401) {
         router.replace("/monitor/login");
         router.refresh();
         return;
       }
-      const json = (await response.json()) as { ok: boolean; error?: string } & Partial<UsageOverviewResponse>;
-      if (!response.ok || !json.ok) {
-        setError(json.error || tRef.current("dashboard.loadError"));
-        if (!background) setLoading(false);
+
+      const usageJson = (await usageResponse.json()) as { ok: boolean; error?: string } & Partial<UsageOverviewResponse>;
+      const historyJson = (await historyResponse.json()) as ({ ok?: boolean; error?: string } & Partial<UsageHistoryResponse>);
+
+      if (!usageResponse.ok || !usageJson.ok) {
+        setError(usageJson.error || tRef.current("dashboard.loadError"));
         return;
       }
-      setData(json as UsageOverviewResponse);
+      if (!historyResponse.ok || !historyJson.ok) {
+        setError(historyJson.error || tRef.current("dashboard.loadError"));
+        return;
+      }
+
+      setData(usageJson as UsageOverviewResponse);
+      setHistory(historyJson as UsageHistoryResponse);
       setLastRefreshed(new Date());
-    } catch (err) {
-      console.error("Failed to load usage:", err);
+    } catch (loadError) {
+      console.error("Failed to load dashboard:", loadError);
       setError(tRef.current("dashboard.apiError"));
     } finally {
-      if (!background) setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
-  }, [router]);
+  }, [historyRange, router]);
 
-  useEffect(() => { void loadUsage(false); }, [loadUsage]);
   useEffect(() => {
-    const timer = window.setInterval(() => { void loadUsage(true); }, 60_000);
-    return () => window.clearInterval(timer);
-  }, [loadUsage]);
+    void loadDashboard(false);
+  }, [loadDashboard]);
 
-  const { claudeAccounts, openaiAccounts, openaiAccountCount, sharedLocalOpenaiCount } = useMemo(() => {
-    if (!data) return { claudeAccounts: [], openaiAccounts: [], openaiAccountCount: 0, sharedLocalOpenaiCount: 0 };
-    const sorted = [...data.accounts].sort((a, b) => {
-      if (a.status === "ok" && b.status !== "ok") return -1;
-      if (a.status !== "ok" && b.status === "ok") return 1;
-      return b.costUsd - a.costUsd;
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadDashboard(true);
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadDashboard]);
+
+  const { claudeAccounts, openaiAccounts } = useMemo(() => {
+    if (!data) {
+      return { claudeAccounts: [], openaiAccounts: [] };
+    }
+    const sorted = [...data.accounts].sort((left, right) => {
+      if (left.status === "ok" && right.status !== "ok") return -1;
+      if (left.status !== "ok" && right.status === "ok") return 1;
+      return left.name.localeCompare(right.name);
     });
-    const rawOpenAIAccounts = sorted.filter((a) => a.provider === "openai");
-    const rawSharedLocalOpenaiCount = rawOpenAIAccounts.filter((a) => a.usageInfo?.sourceScope === "shared_local").length;
-    const sharedName = `${t("dashboard.openaiShared")} (${countDisplay(rawSharedLocalOpenaiCount, t)})`;
-    const openaiDisplay = collapseSharedLocalOpenAIAccounts(rawOpenAIAccounts, sharedName);
     return {
-      claudeAccounts: sorted.filter((a) => a.provider === "claude"),
-      openaiAccounts: openaiDisplay.displayAccounts,
-      openaiAccountCount: rawOpenAIAccounts.length,
-      sharedLocalOpenaiCount: rawSharedLocalOpenaiCount,
+      claudeAccounts: sorted.filter((account) => account.provider === "claude"),
+      openaiAccounts: sorted.filter((account) => account.provider === "openai"),
     };
-  }, [data, t]);
+  }, [data]);
 
   async function handleLogout() {
     try {
       await fetch("/api/monitor/auth/logout", { method: "POST" });
     } catch {
-      // Proceed to login page even if logout API fails
+      // Continue to login page even if the logout API fails.
     }
     router.replace("/monitor/login");
     router.refresh();
@@ -137,15 +174,13 @@ export default function MonitorDashboard({ username, role }: { username: string;
 
   async function handleRefresh() {
     setRefreshing(true);
-    await loadUsage(true);
+    await loadDashboard(true);
     setRefreshing(false);
   }
 
   return (
     <main className="min-h-screen surface-page">
       <div className="max-w-6xl mx-auto px-4 py-5 space-y-4">
-
-        {/* Header */}
         <div className="glass-card rounded-2xl px-5 py-4 flex items-center justify-between gap-3">
           <h1 className="text-3xl font-black gradient-text-brand">{t("usageMonitor")}</h1>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -168,7 +203,14 @@ export default function MonitorDashboard({ username, role }: { username: string;
                   animate={{ rotate: refreshing ? 360 : 0 }}
                   transition={{ duration: 0.6, ease: "linear", repeat: refreshing ? Infinity : 0 }}
                   aria-hidden="true"
-                  width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                   className="text-[var(--text-secondary)]"
                 >
                   <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
@@ -181,31 +223,40 @@ export default function MonitorDashboard({ username, role }: { username: string;
             <LanguageSelector />
             <ThemeToggle />
             {role === "admin" && (
-              <Link href="/monitor/accounts" className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
+              <Link
+                href="/monitor/accounts"
+                className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-secondary)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all"
+              >
                 {t("accountManage")}
               </Link>
             )}
-            <button onClick={handleLogout} className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-muted)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all">
+            <button
+              onClick={handleLogout}
+              className="px-3 py-2 rounded-xl text-base font-semibold text-[var(--text-muted)] hover:text-[var(--text-heading)] hover:bg-[var(--surface-raised)] transition-all"
+            >
               {t("logout")}
             </button>
           </div>
         </div>
 
-        {/* Error */}
         <AnimatePresence>
           {error && (
-            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-              className="glass-card rounded-xl p-4 flex items-center gap-2" style={{ borderColor: "var(--error-border)", background: "var(--error-bg)" }}>
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="glass-card rounded-xl p-4 flex items-center gap-2"
+              style={{ borderColor: "var(--error-border)", background: "var(--error-bg)" }}
+            >
               <p className="text-base font-semibold text-rose-400">{error}</p>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Loading skeleton — only on initial load */}
         {loading && !data && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <div key={i} className="glass-card rounded-xl p-4 space-y-2">
+            {[1, 2, 3, 4, 5, 6].map((index) => (
+              <div key={index} className="glass-card rounded-xl p-4 space-y-2">
                 <div className="h-4 w-3/4 rounded bg-[var(--surface-raised)] animate-pulse" />
                 <div className="h-2 w-full rounded-full bg-[var(--surface-raised)] animate-pulse" />
                 <div className="h-2 w-4/5 rounded-full bg-[var(--surface-raised)] animate-pulse" />
@@ -214,18 +265,10 @@ export default function MonitorDashboard({ username, role }: { username: string;
           </div>
         )}
 
-        {/* Main content — keep visible during background refresh */}
         {data && (
           <>
-            {/* Provider summary - compact */}
-            <ProviderSummary
-              claudeAccounts={claudeAccounts.filter(a => a.status === "ok")}
-              openaiAccounts={openaiAccounts.filter(a => a.status === "ok")}
-              openaiAccountCount={openaiAccountCount}
-              sharedLocalOpenaiCount={sharedLocalOpenaiCount}
-            />
+            <ProviderSummary claudeAccounts={claudeAccounts.filter((account) => account.status === "ok")} openaiAccounts={openaiAccounts.filter((account) => account.status === "ok")} />
 
-            {/* Claude accounts group */}
             {claudeAccounts.length > 0 && (
               <div className="space-y-2.5">
                 <div className="flex items-center gap-2 px-1">
@@ -235,22 +278,21 @@ export default function MonitorDashboard({ username, role }: { username: string;
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-claude) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
-                  {claudeAccounts.map((a) => <AccountCard key={a.accountId} account={a} nowMs={relativeNowMs} />)}
+                  {claudeAccounts.map((account) => <AccountCard key={account.accountId} account={account} nowMs={relativeNowMs} />)}
                 </motion.div>
               </div>
             )}
 
-            {/* OpenAI accounts group */}
             {openaiAccounts.length > 0 && (
               <div className="space-y-2.5">
                 <div className="flex items-center gap-2 px-1">
                   <div className="w-3 h-3 rounded-full bg-[var(--brand-openai)]" />
                   <h2 className="text-xl font-black" style={{ color: "var(--brand-openai)" }}>OpenAI</h2>
-                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(openaiAccountCount, t)}</span>
+                  <span className="text-base text-[var(--text-muted)] font-semibold">{countDisplay(openaiAccounts.length, t)}</span>
                   <div className="flex-1 h-px" style={{ backgroundColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }} />
                 </div>
                 <motion.div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" variants={cardListVariants} initial="hidden" animate="visible">
-                  {openaiAccounts.map((a) => <AccountCard key={a.accountId} account={a} nowMs={relativeNowMs} />)}
+                  {openaiAccounts.map((account) => <AccountCard key={account.accountId} account={account} nowMs={relativeNowMs} />)}
                 </motion.div>
               </div>
             )}
@@ -260,6 +302,35 @@ export default function MonitorDashboard({ username, role }: { username: string;
                 <p className="text-[var(--text-muted)] font-semibold text-lg">{t("noAccounts")}</p>
               </div>
             )}
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3 flex-wrap px-1">
+                <h2 className="text-xl font-black text-[var(--text-heading)]">History</h2>
+                <div className="flex items-center gap-1 rounded-full border border-[var(--border-card)] bg-[var(--surface-raised)] p-1">
+                  {HISTORY_RANGES.map((range) => {
+                    const active = historyRange === range;
+                    return (
+                      <button
+                        key={range}
+                        type="button"
+                        onClick={() => setHistoryRange(range)}
+                        className={`rounded-full px-3.5 py-1.5 text-base font-bold transition-all ${active ? "text-white" : "text-[var(--text-secondary)]"}`}
+                        style={{ backgroundColor: active ? "var(--brand-openai)" : "transparent" }}
+                      >
+                        {historyRangeLabel(range)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <UsageHistoryChart
+                history={history}
+                emphasis={historyEmphasis}
+                onEmphasisChange={setHistoryEmphasis}
+                title="All Accounts History"
+                emptyLabel="No history sampled yet."
+              />
+            </div>
           </>
         )}
       </div>
@@ -283,27 +354,27 @@ function useRelativeNowMs(intervalMs = 60_000): number {
 function formatResetTime(resetsAt: string | null, nowMs: number): string | null {
   if (!resetsAt) return null;
   const reset = new Date(resetsAt);
-  if (isNaN(reset.getTime())) return null;
+  if (Number.isNaN(reset.getTime())) return null;
   const diffMs = reset.getTime() - nowMs;
   if (diffMs <= 0) return null;
-  const diffH = Math.floor(diffMs / 3_600_000);
-  const diffM = Math.floor((diffMs % 3_600_000) / 60_000);
-  if (diffH >= 24) {
-    const diffD = Math.floor(diffH / 24);
-    const remainH = diffH % 24;
-    return remainH > 0 ? `${diffD}d ${remainH}h` : `${diffD}d`;
+
+  const diffHours = Math.floor(diffMs / 3_600_000);
+  const diffMinutes = Math.floor((diffMs % 3_600_000) / 60_000);
+  if (diffHours >= 24) {
+    const diffDays = Math.floor(diffHours / 24);
+    const remainingHours = diffHours % 24;
+    return remainingHours > 0 ? `${diffDays}d ${remainingHours}h` : `${diffDays}d`;
   }
-  if (diffH > 0) return `${diffH}h ${diffM}m`;
-  return `${diffM}m`;
+  if (diffHours > 0) {
+    return `${diffHours}h ${diffMinutes}m`;
+  }
+  return `${diffMinutes}m`;
 }
 
 function AccountCard({ account, nowMs }: { account: AccountUsageReport; nowMs: number }) {
   const { t } = useTranslation();
   const isClaude = account.provider === "claude";
   const brand = isClaude ? "var(--brand-claude)" : "var(--brand-openai)";
-  const isSharedOpenAIMetrics = account.provider === "openai" && account.usageInfo?.sourceScope === "shared_local";
-  const isSharedAggregateCard = account.accountId.startsWith("shared-local-openai:");
-  const isDuplicateAccountCard = account.accountId.startsWith("duplicate-openai-account:");
 
   function statusLabel(status: AccountUsageReport["status"]): string {
     if (status === "ok") return t("statusOk");
@@ -314,10 +385,7 @@ function AccountCard({ account, nowMs }: { account: AccountUsageReport; nowMs: n
   }
 
   return (
-    <motion.div variants={cardVariants}
-      className="relative glass-card rounded-xl p-4 overflow-hidden"
-      style={{ borderLeftWidth: 2, borderLeftColor: brand }}
-    >
+    <motion.div variants={cardVariants} className="relative glass-card rounded-xl p-4 overflow-hidden" style={{ borderLeftWidth: 2, borderLeftColor: brand }}>
       <div className="flex items-center justify-between gap-2 mb-2.5">
         <div className="min-w-0 flex items-center gap-2">
           <p className="font-bold text-lg text-[var(--text-heading)] truncate">{account.name}</p>
@@ -334,33 +402,18 @@ function AccountCard({ account, nowMs }: { account: AccountUsageReport; nowMs: n
       <div className="space-y-1.5">
         {account.usageInfo && account.usageInfo.windows.length > 0 ? (
           <>
-            {account.usageInfo.windows.map((win) => {
-              const pct = Math.min(Math.round(win.utilization), 100);
-              const resetStr = formatResetTime(win.resetsAt, nowMs);
-              return <UtilizationBar key={win.label} pct={pct} label={win.label} resetStr={resetStr} />;
+            {account.usageInfo.windows.map((window) => {
+              const pct = Math.min(Math.round(window.utilization), 100);
+              const resetStr = formatResetTime(window.resetsAt, nowMs);
+              return <UtilizationBar key={`${window.key}:${window.label}`} pct={pct} label={window.label} resetStr={resetStr} />;
             })}
           </>
-        ) : account.provider === "openai" && (account.costUsd > 0 || account.requests > 0 || account.tokens > 0) ? (
-          <div className="flex gap-3 text-sm">
-            <span className="text-[var(--text-muted)]">{t("cost")} <strong className="text-[var(--text-body)]">${account.costUsd.toFixed(2)}</strong></span>
-            <span className="text-[var(--text-muted)]">{t("requests")} <strong className="text-[var(--text-body)]">{account.requests.toLocaleString()}</strong></span>
-            <span className="text-[var(--text-muted)]">{t("tokens")} <strong className="text-[var(--text-body)]">{account.tokens.toLocaleString()}</strong></span>
-          </div>
         ) : (
           <p className="text-sm text-[var(--text-dim)]">{t("noUsage")}</p>
         )}
-        {account.usageInfo?.codexMetrics && <CodexMetricsRow metrics={account.usageInfo.codexMetrics} nowMs={nowMs} />}
-        {isSharedOpenAIMetrics && (
-          <div className="space-y-0.5">
-            <p className="text-xs text-[var(--text-dim)]">{t("dashboard.sharedLocalMetrics")}</p>
-            <p className="text-xs text-[var(--text-dim)]">{t("dashboard.notAccountSpecific")}</p>
-          </div>
-        )}
-        {isDuplicateAccountCard && (
-          <div className="space-y-0.5">
-            <p className="text-xs text-[var(--text-dim)]">{account.usageInfo?.accountIdentity?.email || t("dashboard.sharedOpenAIAccount")}</p>
-            <p className="text-xs text-[var(--text-dim)]">{t("dashboard.sameOpenAIAccount")}</p>
-          </div>
+
+        {account.provider === "openai" && account.usageInfo?.accountIdentity?.email && (
+          <p className="text-xs text-[var(--text-dim)] truncate">{account.usageInfo.accountIdentity.email}</p>
         )}
       </div>
 
@@ -370,77 +423,34 @@ function AccountCard({ account, nowMs }: { account: AccountUsageReport; nowMs: n
         </p>
       )}
 
-      {!isSharedAggregateCard && !isDuplicateAccountCard && (
-        <Link href={`/monitor/accounts/${account.accountId}`}
-          className="mt-2.5 inline-flex items-center gap-1 text-base font-semibold transition-colors"
-          style={{ color: brand }}>
-          {t("dashboard.detailLink")}
-        </Link>
-      )}
+      <Link
+        href={`/monitor/accounts/${account.accountId}`}
+        className="mt-2.5 inline-flex items-center gap-1 text-base font-semibold transition-colors"
+        style={{ color: brand }}
+      >
+        {t("dashboard.detailLink")}
+      </Link>
     </motion.div>
-  );
-}
-
-function formatRelativeTime(isoStr: string, nowMs: number): string {
-  const diff = nowMs - new Date(isoStr).getTime();
-  if (diff < 0 || isNaN(diff)) return "";
-  const m = Math.floor(diff / 60_000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
-}
-
-function CodexMetricsRow({ metrics, nowMs }: { metrics: CodexMetrics; nowMs: number }) {
-  const displayTurns = metrics.totalTurns > 0 ? metrics.totalTurns : metrics.sessionTurns;
-  const displayTokens = metrics.sessionTotalTokens > 0
-    ? metrics.sessionTotalTokens
-    : metrics.sessionInputTokens + metrics.sessionOutputTokens;
-  const hasTokens = displayTokens > 0;
-  const hasTurns = displayTurns > 0;
-  if (!hasTokens && !hasTurns && !metrics.lastActivity) return null;
-  return (
-    <div className="mt-1 pt-1 border-t border-[var(--border-card)]">
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--text-muted)]">
-        {hasTurns && (
-          <span>Turns <strong className="text-[var(--text-body)]">{displayTurns.toLocaleString()}</strong></span>
-        )}
-        {hasTokens && (
-          <span>Tokens <strong className="text-[var(--text-body)]">{displayTokens.toLocaleString()}</strong>
-            <span className="text-[var(--text-dim)]"> ({metrics.sessionInputTokens.toLocaleString()}in / {metrics.sessionOutputTokens.toLocaleString()}out)</span>
-          </span>
-        )}
-        {metrics.lastActivity && (
-          <span>Active <strong className="text-[var(--text-body)]">{formatRelativeTime(metrics.lastActivity, nowMs)}</strong></span>
-        )}
-      </div>
-    </div>
   );
 }
 
 function ProviderSummary({
   claudeAccounts,
   openaiAccounts,
-  openaiAccountCount,
-  sharedLocalOpenaiCount,
 }: {
   claudeAccounts: AccountUsageReport[];
   openaiAccounts: AccountUsageReport[];
-  openaiAccountCount: number;
-  sharedLocalOpenaiCount: number;
 }) {
   const { t } = useTranslation();
 
-  function buildWindowMap(accs: AccountUsageReport[]) {
+  function buildWindowMap(accounts: AccountUsageReport[]) {
     const map = new Map<string, number[]>();
-    for (const acc of accs) {
-      for (const win of acc.usageInfo?.windows || []) {
-        const pct = Math.min(Math.round(win.utilization), 100);
-        const list = map.get(win.label) || [];
+    for (const account of accounts) {
+      for (const window of account.usageInfo?.windows || []) {
+        const pct = Math.min(Math.round(window.utilization), 100);
+        const list = map.get(window.label) || [];
         list.push(pct);
-        map.set(win.label, list);
+        map.set(window.label, list);
       }
     }
     return map;
@@ -448,10 +458,10 @@ function ProviderSummary({
 
   const claudeWindowMap = buildWindowMap(claudeAccounts);
   const openaiWindowMap = buildWindowMap(openaiAccounts);
-  const openaiTotalCost = openaiAccounts.reduce((s, a) => s + a.costUsd, 0);
-  const openaiTotalRequests = openaiAccounts.reduce((s, a) => s + a.requests, 0);
-  const openaiTotalTokens = openaiAccounts.reduce((s, a) => s + a.tokens, 0);
-  if (claudeAccounts.length === 0 && openaiAccounts.length === 0) return null;
+
+  if (claudeAccounts.length === 0 && openaiAccounts.length === 0) {
+    return null;
+  }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -464,40 +474,34 @@ function ProviderSummary({
           </div>
           {claudeWindowMap.size > 0 ? (
             <div className="space-y-1.5">
-              {Array.from(claudeWindowMap.entries()).map(([label, pcts]) => {
-                const avg = Math.round(pcts.reduce((s, v) => s + v, 0) / pcts.length);
+              {Array.from(claudeWindowMap.entries()).map(([label, values]) => {
+                const avg = Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
                 return <UtilizationBar key={label} pct={avg} label={label} />;
               })}
             </div>
-          ) : <p className="text-sm text-[var(--text-dim)]">{t("noData")}</p>}
+          ) : (
+            <p className="text-sm text-[var(--text-dim)]">{t("noData")}</p>
+          )}
         </div>
       )}
+
       {openaiAccounts.length > 0 && (
         <div className="glass-card rounded-xl p-4 overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--brand-openai) 20%, transparent)" }}>
           <div className="flex items-center gap-2 mb-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[var(--brand-openai)]" />
-            <p className="text-base font-black" style={{ color: "var(--brand-openai)" }}>{t("dashboard.openaiTotal")}</p>
-            <span className="text-sm text-[var(--text-muted)]">{countDisplay(openaiAccountCount, t)}</span>
+            <p className="text-base font-black" style={{ color: "var(--brand-openai)" }}>OpenAI</p>
+            <span className="text-sm text-[var(--text-muted)]">{countDisplay(openaiAccounts.length, t)}</span>
           </div>
           {openaiWindowMap.size > 0 ? (
             <div className="space-y-1.5">
-              {Array.from(openaiWindowMap.entries()).map(([label, pcts]) => {
-                const avg = Math.round(pcts.reduce((s, v) => s + v, 0) / pcts.length);
+              {Array.from(openaiWindowMap.entries()).map(([label, values]) => {
+                const avg = Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
                 return <UtilizationBar key={label} pct={avg} label={label} />;
               })}
-              {sharedLocalOpenaiCount > 1 && (
-                <p className="text-xs text-[var(--text-dim)]">
-                  {sharedLocalOpenaiCount} {t("dashboard.sharedLocalAccountsSuffix")}
-                </p>
-              )}
             </div>
-          ) : (openaiTotalCost > 0 || openaiTotalRequests > 0 || openaiTotalTokens > 0) ? (
-            <div className="flex gap-4 text-sm">
-              <span className="text-[var(--text-muted)]">{t("cost")} <strong className="text-[var(--text-body)]">${openaiTotalCost.toFixed(2)}</strong></span>
-              <span className="text-[var(--text-muted)]">{t("requests")} <strong className="text-[var(--text-body)]">{openaiTotalRequests.toLocaleString()}</strong></span>
-              <span className="text-[var(--text-muted)]">{t("tokens")} <strong className="text-[var(--text-body)]">{openaiTotalTokens.toLocaleString()}</strong></span>
-            </div>
-          ) : <p className="text-sm text-[var(--text-dim)]">{t("noData")}</p>}
+          ) : (
+            <p className="text-sm text-[var(--text-dim)]">{t("noData")}</p>
+          )}
         </div>
       )}
     </div>

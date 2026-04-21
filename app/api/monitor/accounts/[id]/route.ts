@@ -11,8 +11,7 @@ const PROVIDERS: ProviderType[] = ["claude", "openai"];
 const CLIENT_UPDATE_ACCOUNT_ERRORS = new Set([
   "Account name must be 200 characters or less.",
   "Session cookie must be 20,000 characters or less.",
-  "API key must be 500 characters or less.",
-  "Organization ID must be 500 characters or less.",
+  "Auth identity must be 500 characters or less.",
   "MONITOR_ENCRYPTION_KEY must be set.",
 ]);
 
@@ -75,15 +74,40 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (provider && !PROVIDERS.includes(provider)) {
     return secureJson({ ok: false, error: "Unsupported provider. (claude or openai)" }, { status: 400 });
   }
+  if (provider === "openai") {
+    return secureJson(
+      { ok: false, error: "OpenAI accounts must be imported from the CLIProxyAPI Codex auth store." },
+      { status: 400 },
+    );
+  }
 
   try {
+    const sessionCookie = body.sessionCookie !== undefined ? String(body.sessionCookie || "") : undefined;
+    const credentialUpdates: Record<string, unknown> = {};
+
+    if (sessionCookie !== undefined) {
+      credentialUpdates.authMode = sessionCookie.trim() ? "manual_cookie" : "";
+      credentialUpdates.authIdentity = body.authIdentity !== undefined
+        ? String(body.authIdentity || "")
+        : (sessionCookie.trim() ? undefined : "");
+      credentialUpdates.lastSyncedAt = sessionCookie.trim() ? new Date().toISOString() : "";
+      credentialUpdates.syncSource = sessionCookie.trim() ? "manual_cookie" : "";
+    }
+
+    if (body.apiKey !== undefined || body.organizationId !== undefined) {
+      return secureJson(
+        { ok: false, error: "OpenAI API key accounts are no longer supported. Use a CLIProxyAPI Codex auth-store import." },
+        { status: 400 },
+      );
+    }
+
     const config = await updateMonitorAccount(id, {
       name: body.name !== undefined ? String(body.name || "") : undefined,
       provider,
       enabled: body.enabled !== undefined ? parseBooleanInput(body.enabled) : undefined,
-      sessionCookie: body.sessionCookie !== undefined ? String(body.sessionCookie || "") : undefined,
-      apiKey: body.apiKey !== undefined ? String(body.apiKey || "") : undefined,
-      organizationId: body.organizationId !== undefined ? String(body.organizationId || "") : undefined,
+      sessionCookie,
+      authIdentity: body.authIdentity !== undefined ? String(body.authIdentity || "") : undefined,
+      ...(credentialUpdates as Partial<Parameters<typeof updateMonitorAccount>[1]>),
     });
 
     return secureJson({ ok: true, accounts: config.accounts.map(toPublicAccount) });

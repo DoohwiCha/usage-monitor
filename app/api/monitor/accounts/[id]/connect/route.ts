@@ -47,7 +47,10 @@ export async function POST(request: Request, context: RouteContext) {
   // Auto-update account name with identity (like Claude browser login)
   if (result.identity?.email) {
     try {
-      const updated = await updateMonitorAccount(id, { name: result.identity.email });
+      const updated = await updateMonitorAccount(id, {
+        name: result.identity.email,
+        authIdentity: result.identity.email,
+      });
       const refreshed = updated.accounts.find((a) => a.id === id);
       return secureJson({
         ok: true,
